@@ -610,13 +610,14 @@ let undoStack=[], redoStack=[];
 let pointerMap=new Map(), pointerRoleMap=new Map(), gesture=null, action=null;
 let transformAnimTimer=null, lastGestureAt=0, touchBlockMouseUntil=0;
 let nativeTouchGesture=null, nativeTouchSingle=null, suppressPointerUntil=0;
-/* v8：Safari / iPad 會在 stylus pointerType=pen 後補送一筆 touchstart。
+/* v9：Safari / iPad 會在 stylus pointerType=pen 後補送一筆 touchstart。
    這會干擾自訂雙指縮放層，所以要用座標 + 時間把「筆的 ghost touch」濾掉。
    同時記錄 TouchEvent radius：手指通常 radius 較大；eiP2/細筆尖 touch 常為 0 或很小。 */
 let recentPenNativeGuard={x:0,y:0,t:0};
 let recentNativeTouch={x:0,y:0,r:0,t:0,touches:0};
 let nativeFingerUntil=0;
 let touchCommitTimer=null, lastRawMoveAt=new Map(), lastMoveSig=new Map();
+let deferredInkRefineTimer=null;
 let inputDebugRows=[], inputDebugEnabled=true, inputDebugRenderTimer=null, perfFrameCounter=0, perfLastTs=performance.now(), perfFPS=0;
 let compatStylusConfidence=0, lastCompatStylusAt=0, lastRealPenAt=0;
 let pageRenderStats={lastObjectCount:0,lastPointCount:0,lastRenderMs:0};
@@ -1247,6 +1248,21 @@ function drawLiveStrokeFast(c,obj){
   c.lineTo(pts[pts.length-1].x,pts[pts.length-1].y);c.stroke();
   c.restore();obj._liveDrawn=Math.max(1,pts.length-1);
 }
+function commitStrokeFastToMain(obj){
+  if(!obj)return;
+  const old=obj._liveDrawn;
+  obj._liveDrawn=0;
+  drawLiveStrokeFast(ctx,obj);
+  obj._liveDrawn=old;
+}
+function scheduleDeferredInkRefine(){
+  clearTimeout(deferredInkRefineTimer);
+  deferredInkRefineTimer=setTimeout(function refineLater(){
+    if(isInputBusy()){deferredInkRefineTimer=setTimeout(refineLater,220);return;}
+    /* 快寫時先用 fast commit 保證即時顯示；停筆後再重繪成高品質平滑筆跡。 */
+    renderObjects();renderOverlay();
+  },260);
+}
 function renderOverlay(){
   ov.clearRect(0,0,PAGE_W,PAGE_H);
   const sel=getSelectedObjects();
@@ -1800,6 +1816,32 @@ function isFingerLikeTouch(e){const cs=contactSizeOf(e);return hasContactGeometr
 function isSmallStylusLikeTouch(e){const cs=contactSizeOf(e);return hasContactGeometry(e)&&cs>1.5&&cs<=28;}
 function isAmbiguousTouch(e){const cs=contactSizeOf(e);return (e.pointerType||'')==='touch'&&app.smartTouchStylus&&isDrawingCapableTool()&&(!hasContactGeometry(e)||(cs>1.5&&cs<=34));}
 function stylusConfidenceBoost(){const dt=Date.now()-lastCompatStylusAt;return dt<1800?0.9:dt<4500?0.45:0;}
+function isPenContactActive(e){
+  if((e.pointerType||'')!=='pen')return false;
+  if(e.type==='pointerup'||e.type==='pointercancel')return false;
+  const pr=Number(e.pressure)||0;
+  if(pr>0)return true;
+  /* 部分 Safari / 第三方筆在快寫時 buttons 不可靠，但如果是 pen move/rawupdate，仍當作可救援輸入。 */
+  return e.type==='pointermove'||e.type==='pointerrawupdate';
+}
+function rescueOrphanPenMove(e,role){
+  if(role!=='pen'||!isPenContactActive(e)||!isDrawingCapableTool())return false;
+  clearTouchPending();
+  if(action&&action.kind==='pan')action=null;
+  markRecentPenForNativeTouch(e);
+  penPointerId=e.pointerId;lastPenAt=Date.now();
+  pointerRoleMap.set(e.pointerId,'pen');pointerMap.set(e.pointerId,e);
+  try{viewport.setPointerCapture?.(e.pointerId);}catch(_){}
+  const pts=collectMovePoints(e);
+  const first=pts[0]||samplePoint(e);
+  debugEventRow(e,'rescue','pen','orphan-move-start');
+  const started=beginToolActionAfterInkGate(e,first,'pen');
+  if(started&&action&&action.kind==='draw'){
+    for(const sp of pts.slice(1))addPointToStroke(action.obj,sp,true);
+    requestLiveRender();
+  }
+  return !!started;
+}
 function classifyPointerInput(e,phase='move'){
   const pt=e.pointerType||'';
   if(pt==='touch'&&Date.now()<suppressPointerUntil)return 'nativeTouch';
@@ -2155,8 +2197,12 @@ function handlePointerMove(e){
   e.preventDefault();if(!shouldProcessMoveEvent(e))return;showEraserCursor(e);
   if(!pointerMap.has(e.pointerId)){
     const role=classifyPointerInput(e,'move');
+    /* v9：快寫時 Safari/第三方筆偶爾會先送 pointermove/pointerrawupdate，pointerdown 來不及進來。
+       舊版在沒有 pointerdown 的情況直接 return，造成「快一點就偵測不到」。
+       這裡把有壓力或 pen move 的孤兒移動事件直接救援成一筆新 stroke。 */
+    if(rescueOrphanPenMove(e,role))return;
     if(pointerMayCreateInk(role,e)&&action&&action.kind==='draw'){
-      pointerMap.set(e.pointerId,e);pointerRoleMap.set(e.pointerId,role);penPointerId=e.pointerId;lastPenAt=Date.now();viewport.setPointerCapture?.(e.pointerId);
+      pointerMap.set(e.pointerId,e);pointerRoleMap.set(e.pointerId,role);penPointerId=e.pointerId;lastPenAt=Date.now();try{viewport.setPointerCapture?.(e.pointerId);}catch(_){}
     }else{updateInputBadge(e.pointerType||app.lastPointerType);return;}
   }
   pointerMap.set(e.pointerId,e);
@@ -2256,7 +2302,14 @@ function pointerEnd(e,cancelled){
     if(len>2){pushUndo();activePage().objects.push(o);activePage().updatedAt=Date.now();persistSoon();scheduleThumbs();}
     renderObjects();renderOverlay();
   }
-  if(a.kind==='draw'){delete a.obj._liveDrawn;if(!a.stitched)pushAdd(a.obj);drawObject(ctx,a.obj,false);renderOverlay();activePage().updatedAt=Date.now();persistSoon();scheduleThumbs();}
+  if(a.kind==='draw'){
+    if(!a.stitched)pushAdd(a.obj);
+    /* v9：抬筆當下只做 fast commit，不做完整 refine/outline，避免主執行緒卡住而漏掉下一個快筆 pointerdown。 */
+    commitStrokeFastToMain(a.obj);
+    delete a.obj._liveDrawn;
+    renderOverlay();scheduleDeferredInkRefine();
+    activePage().updatedAt=Date.now();persistSoon();scheduleThumbs();
+  }
   if(a.kind==='moveSelection'||a.kind==='scaleSelection'){activePage().updatedAt=Date.now();persistSoon();scheduleThumbs();renderOverlay();}
   if(a.kind==='erase'){
     renderOverlay();
