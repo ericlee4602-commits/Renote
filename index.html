@@ -341,6 +341,33 @@ body.dark .debug-table-wrap{background:rgba(40,34,29,.45)}
   *{animation-duration:.01ms !important;transition-duration:.01ms !important}
 }
 :where(button,input,select,textarea):focus-visible{outline:2px solid var(--sel);outline-offset:2px}
+
+
+/* ============ v14 Studio Notes：底部工具列 + 跟手 UI ============ */
+.toolstrip{
+  top:auto!important;bottom:calc(env(safe-area-inset-bottom,0px) + 12px)!important;left:50%!important;
+  transform:translateX(-50%)!important;max-width:min(98vw,1060px);min-height:58px;
+  padding:7px 12px;border-radius:24px;box-shadow:0 18px 44px rgba(80,60,45,.18);
+  touch-action:none;overscroll-behavior:none;
+}
+.toolstrip.dragged{top:auto!important;bottom:calc(env(safe-area-inset-bottom,0px) + 12px)!important;left:50%!important;transform:translateX(-50%)!important;}
+.strip-grip{display:none!important}
+.tool{height:48px;min-width:52px;border-radius:16px;flex-direction:column;gap:2px;padding:5px 9px;}
+.tool svg{width:21px;height:21px;}
+.tool .lbl{display:block;font-size:10px;line-height:1;font-weight:800;letter-spacing:.02em;}
+.tool.active{transform:translateY(-2px);box-shadow:0 8px 18px rgba(125,103,94,.16)}
+.mini-swatches{gap:7px}.mswatch{width:28px;height:28px}.wdot{width:36px;height:36px}
+.float-zoom{bottom:calc(env(safe-area-inset-bottom,0px) + 86px)!important;right:18px;}
+.float-nav{bottom:calc(env(safe-area-inset-bottom,0px) + 86px)!important;}
+.float-history{bottom:calc(env(safe-area-inset-bottom,0px) + 86px)!important;left:18px;}
+#canvasWrap{transition:filter .18s ease}.workspace{padding-bottom:86px;}
+#shapeChips .chip{min-width:70px;justify-content:center}.shape-hint{font-size:11.5px;color:var(--muted);line-height:1.45;margin-top:-4px}
+@media(max-width:760px){
+  .toolstrip{border-radius:22px;max-width:calc(100vw - 14px);overflow-x:auto;padding:6px 9px;}
+  .tool{min-width:48px;height:46px}.tool .lbl{font-size:9.5px}.sep{display:none}.mini-swatches .mswatch:nth-child(n+6){display:none}
+  .float-history{left:10px}.float-zoom{right:10px}.float-nav{display:none}
+}
+
 </style>
 </head>
 <body>
@@ -451,7 +478,7 @@ body.dark .debug-table-wrap{background:rgba(40,34,29,.45)}
   <div id="shapeOpts">
     <h4>圖形</h4>
     <div class="chip-row" id="shapeChips"></div>
-    <div class="chip-row" style="margin-top:8px"><button class="chip" id="fillToggle">填滿</button><button class="chip" id="snapToggle">角度吸附 15°</button></div>
+    <div class="chip-row" style="margin-top:8px"><button class="chip" id="fillToggle">填滿</button><button class="chip" id="snapToggle">角度 / 等比例</button></div><div class="shape-hint">拖曳即可建立圖形；正方形/正圓會自動等比例，直線與箭頭可吸附 15°。</div>
   </div>
   <div id="textOpts">
     <h4>文字大小</h4>
@@ -618,14 +645,14 @@ let recentNativeTouch={x:0,y:0,r:0,t:0,touches:0};
 let nativeFingerUntil=0;
 let touchCommitTimer=null, lastRawMoveAt=new Map(), lastMoveSig=new Map();
 let deferredInkRefineTimer=null, lastInkCommitAt=0, inkBurstCount=0, lastInkRefineAt=0;
-let inputDebugRows=[], inputDebugEnabled=true, inputDebugRenderTimer=null, perfFrameCounter=0, perfLastTs=performance.now(), perfFPS=0;
+let inputDebugRows=[], inputDebugEnabled=false, inputDebugRenderTimer=null, perfFrameCounter=0, perfLastTs=performance.now(), perfFPS=0;
 let debugLastMoveLogAt=0, debugMoveSkip=0, debugPanelVisible=false;
 /* v13：低延遲筆跡。
    v12 的補點 / native ink rescue 會讓快寫更重；v13 回到「少做事」策略：
    1) pen 事件一進來就立刻補畫，不等下一個 rAF；
    2) debug 預設關閉，開面板才記錄；
    3) 不在 move 期間做插值或高品質重繪。 */
-let immediateInkLastAt=0, immediateInkFrameBudgetMs=7;
+let immediateInkLastAt=0, immediateInkFrameBudgetMs=5;
 let compatStylusConfidence=0, lastCompatStylusAt=0, lastRealPenAt=0;
 let pageRenderStats={lastObjectCount:0,lastPointCount:0,lastRenderMs:0};
 let penPointerId=null, lastPenAt=0;      // 手掌拒絕：追蹤觸控筆狀態
@@ -656,7 +683,7 @@ const TOOLS=[
   ['write','pen','書寫'],['eraser','eraser','橡皮'],['lasso','lasso','套索'],
   ['shape','shape','圖形'],['text','text','文字'],['stamp','stamp','貼紙'],['laser','laser','雷射']
 ];
-const SHAPES=[['line','直線'],['arrow','箭頭'],['rect','矩形'],['ellipse','橢圓'],['triangle','三角'],['star','星形']];
+const SHAPES=[['line','直線'],['arrow','箭頭'],['rect','矩形'],['square','正方形'],['ellipse','橢圓'],['circle','正圓'],['triangle','三角形'],['diamond','菱形'],['star','星形']];
 const FONT_SIZES=[18,24,32,44,60];
 const ERASER_SIZES=[['precision','精準',10],['normal','一般',22],['wide','大面積',46]];
 const TEMPLATES=[['blank','空白'],['ruled','橫線'],['grid','方格'],['dot','點陣'],['cornell','康乃爾'],['todo','待辦'],['music','五線譜'],['planner','日計畫']];
@@ -1088,24 +1115,44 @@ function drawStrokeObject(c,obj,preview){
   c.restore();
 }
 function drawShapeObject(c,obj,preview){
-  const {x:x1,y:y1}=obj.p1,{x:x2,y:y2}=obj.p2; c.save();
-  c.globalAlpha=preview?.7:(obj.opacity??1); c.lineWidth=obj.width; c.strokeStyle=obj.color;
-  c.lineJoin='round'; c.lineCap='round';
-  const fill=obj.fill&&obj.fill!=='transparent';
-  if(fill)c.fillStyle=obj.fill;
+  let {x:x1,y:y1}=obj.p1,{x:x2,y:y2}=obj.p2;
+  const shape=obj.shape;
+  if(shape==='square'||shape==='circle'){
+    const side=Math.max(Math.abs(x2-x1),Math.abs(y2-y1));
+    x2=x1+Math.sign((x2-x1)||1)*side;y2=y1+Math.sign((y2-y1)||1)*side;
+  }
+  c.save();
+  c.globalAlpha=preview?.72:(obj.opacity??1);c.lineWidth=Math.max(.8,obj.width||3);c.strokeStyle=obj.color;
+  c.lineJoin='round';c.lineCap='round';
+  const fill=obj.fill&&obj.fill!=='transparent';if(fill)c.fillStyle=obj.fill;
   const L=Math.min(x1,x2),T=Math.min(y1,y2),Wd=Math.abs(x2-x1),Hd=Math.abs(y2-y1);
-  if(obj.shape==='line'||obj.shape==='arrow'){
+  const cx=L+Wd/2,cy=T+Hd/2;
+  function finishPath(){if(fill)c.fill();c.stroke();}
+  if(shape==='line'||shape==='arrow'){
     c.beginPath();c.moveTo(x1,y1);c.lineTo(x2,y2);c.stroke();
-    if(obj.shape==='arrow'){const a=Math.atan2(y2-y1,x2-x1),len=Math.max(12,obj.width*4);
-      c.beginPath();c.moveTo(x2,y2);c.lineTo(x2-len*Math.cos(a-Math.PI/6),y2-len*Math.sin(a-Math.PI/6));
-      c.moveTo(x2,y2);c.lineTo(x2-len*Math.cos(a+Math.PI/6),y2-len*Math.sin(a+Math.PI/6));c.stroke();}
-  }else if(obj.shape==='rect'){if(fill)c.fillRect(L,T,Wd,Hd);c.strokeRect(L,T,Wd,Hd);}
-  else if(obj.shape==='ellipse'){c.beginPath();c.ellipse(L+Wd/2,T+Hd/2,Wd/2,Hd/2,0,0,Math.PI*2);if(fill)c.fill();c.stroke();}
-  else if(obj.shape==='triangle'){c.beginPath();c.moveTo(L+Wd/2,T);c.lineTo(L+Wd,T+Hd);c.lineTo(L,T+Hd);c.closePath();if(fill)c.fill();c.stroke();}
-  else if(obj.shape==='star'){
-    const cx=L+Wd/2,cy=T+Hd/2,R=Math.min(Wd,Hd)/2,r=R*.45;c.beginPath();
+    if(shape==='arrow'){
+      const a=Math.atan2(y2-y1,x2-x1),len=Math.max(14,(obj.width||3)*5);
+      c.beginPath();c.moveTo(x2,y2);
+      c.lineTo(x2-len*Math.cos(a-Math.PI/6),y2-len*Math.sin(a-Math.PI/6));
+      c.moveTo(x2,y2);c.lineTo(x2-len*Math.cos(a+Math.PI/6),y2-len*Math.sin(a+Math.PI/6));c.stroke();
+    }
+  }else if(shape==='rect'||shape==='square'){
+    const r=Math.min(12,Math.min(Wd,Hd)*.08);
+    c.beginPath();
+    c.moveTo(L+r,T);c.lineTo(L+Wd-r,T);c.quadraticCurveTo(L+Wd,T,L+Wd,T+r);
+    c.lineTo(L+Wd,T+Hd-r);c.quadraticCurveTo(L+Wd,T+Hd,L+Wd-r,T+Hd);
+    c.lineTo(L+r,T+Hd);c.quadraticCurveTo(L,T+Hd,L,T+Hd-r);
+    c.lineTo(L,T+r);c.quadraticCurveTo(L,T,L+r,T);c.closePath();finishPath();
+  }else if(shape==='ellipse'||shape==='circle'){
+    c.beginPath();c.ellipse(cx,cy,Wd/2,Hd/2,0,0,Math.PI*2);finishPath();
+  }else if(shape==='triangle'){
+    c.beginPath();c.moveTo(cx,T);c.lineTo(L+Wd,T+Hd);c.lineTo(L,T+Hd);c.closePath();finishPath();
+  }else if(shape==='diamond'){
+    c.beginPath();c.moveTo(cx,T);c.lineTo(L+Wd,cy);c.lineTo(cx,T+Hd);c.lineTo(L,cy);c.closePath();finishPath();
+  }else if(shape==='star'){
+    const R=Math.min(Wd,Hd)/2,r=R*.45;c.beginPath();
     for(let i=0;i<10;i++){const ang=-Math.PI/2+i*Math.PI/5,rad=i%2?r:R;const px=cx+rad*Math.cos(ang),py=cy+rad*Math.sin(ang);i?c.lineTo(px,py):c.moveTo(px,py);}
-    c.closePath();if(fill)c.fill();c.stroke();
+    c.closePath();finishPath();
   }
   c.restore();
 }
@@ -1499,7 +1546,8 @@ function setTool(tool,opts){
   if(tool==='laser')app.color='#d65757';
   if(tool!=='lasso')app.selectedIds=[];
   renderToolUI();renderOverlay();persistSoon();
-  viewport.classList.toggle('hand',tool==='hand');
+  viewport.classList.toggle('hand',false);
+  if(tool==='shape'&&!opts.silentPop){setTimeout(()=>{if(app.tool==='shape')openPenPop();},40);}
 }
 function renderToolUI(){
   $$('#toolDock .tool').forEach(b=>{
@@ -1594,7 +1642,7 @@ function buildToolStrip(){
     b.onclick=()=>{app.color=c;app.recentColors=[c].concat((app.recentColors||[]).filter(x=>x!==c)).slice(0,9);
       if(app.selectedIds.length)recolorSelected(c);renderToolUI();persistSoon();};pal.appendChild(b);});
   const sc=$('#shapeChips');sc.innerHTML='';
-  SHAPES.forEach(([id,lbl])=>{const b=document.createElement('button');b.className='chip';b.dataset.shape=id;b.textContent=lbl;
+  SHAPES.forEach(([id,lbl])=>{const b=document.createElement('button');b.className='chip';b.dataset.shape=id;b.textContent=lbl;b.title='圖形：'+lbl;
     b.onclick=()=>{app.shape=id;renderToolUI();persistSoon();};sc.appendChild(b);});
   const fc=$('#fontChips');fc.innerHTML='';
   FONT_SIZES.forEach(s=>{const b=document.createElement('button');b.className='chip';b.dataset.size=s;b.textContent=s+'px';
@@ -1751,10 +1799,22 @@ function constrainToRuler(start,cur){
   return {x:start.x+t*ux,y:start.y+t*uy,p:cur.p||.5};
 }
 function snapShapePoint(p1,p2){
-  if(!app.shapeSnap||(app.shape!=='line'&&app.shape!=='arrow'))return p2;
-  const a=Math.atan2(p2.y-p1.y,p2.x-p1.x);const step=Math.PI/12;
-  const sa=Math.round(a/step)*step;const d=Math.hypot(p2.x-p1.x,p2.y-p1.y);
-  return {x:p1.x+d*Math.cos(sa),y:p1.y+d*Math.sin(sa),p:p2.p||.5};
+  const shape=app.shape;
+  const dx=p2.x-p1.x,dy=p2.y-p1.y;
+  if(shape==='square'||shape==='circle'){
+    const side=Math.max(Math.abs(dx),Math.abs(dy));
+    return {x:p1.x+Math.sign(dx||1)*side,y:p1.y+Math.sign(dy||1)*side,p:p2.p||.5};
+  }
+  if((shape==='rect'||shape==='ellipse'||shape==='triangle'||shape==='diamond'||shape==='star')&&app.shapeSnap){
+    const side=Math.max(Math.abs(dx),Math.abs(dy));
+    return {x:p1.x+Math.sign(dx||1)*side,y:p1.y+Math.sign(dy||1)*side,p:p2.p||.5};
+  }
+  if(app.shapeSnap&&(shape==='line'||shape==='arrow')){
+    const a=Math.atan2(dy,dx),step=Math.PI/12;
+    const sa=Math.round(a/step)*step,d=Math.hypot(dx,dy);
+    return {x:p1.x+d*Math.cos(sa),y:p1.y+d*Math.sin(sa),p:p2.p||.5};
+  }
+  return p2;
 }
 function currentStroke(points){const o={id:uid('obj'),type:'stroke',tool:app.tool,color:app.color,width:Number(app.width),opacity:Number(app.opacity),tilt:app.tiltSens??.5,smooth:app.smoothSens??.5,points:normalizeStrokePoints(points||[])};if(app._recStart)o.at=Date.now()-app._recStart;return o;}
 
@@ -2085,9 +2145,10 @@ function shouldProcessMoveEvent(e){
 function collectMovePoints(e){
   let evs=e.getCoalescedEvents?e.getCoalescedEvents():null;
   if(!evs||!evs.length)evs=[e];
-  /* v13：保留 coalesced 原始點，但避免極端情況一次塞入過多點造成卡頓。 */
-  if(evs.length>24){
-    const step=Math.ceil(evs.length/24), sampled=[];
+  /* v14：保留更多正常筆跡點；極端 burst 才降採樣，兼顧精度與速度。 */
+  const maxPts=(e.pointerType==='pen')?30:20;
+  if(evs.length>maxPts){
+    const step=Math.ceil(evs.length/maxPts), sampled=[];
     for(let i=0;i<evs.length;i+=step)sampled.push(evs[i]);
     if(sampled[sampled.length-1]!==evs[evs.length-1])sampled.push(evs[evs.length-1]);
     evs=sampled;
@@ -2198,6 +2259,7 @@ function handleNativeTouchEnd(ev){
 }
 
 function handlePointerDown(e){
+  clearTimeout(deferredInkRefineTimer);
   if((e.pointerType||'')==='touch'&&Date.now()<suppressPointerUntil){debugEventRow(e,'down','nativeTouch','suppressed-pointer');e.preventDefault();return;}
   e.preventDefault();updateInputBadge(e.pointerType||'unknown');
   closeAllPanelsSoft();
@@ -2874,6 +2936,8 @@ function init(){
   if(app.smoothSens==null)app.smoothSens=.45;
   if(app._smartInputV7!==true){app.smartTouchStylus=true;app.touchDraw=false;app.debugInput=false;app._smartInputV7=true;}
   if(app.smartTouchStylus==null)app.smartTouchStylus=true;
+  if(app._studioNotesV14!==true){app.dockX=null;app.dockY=null;app.shapeSnap=true;app._studioNotesV14=true;}
+  app.debugInput=false;
   if(app.debugInput==null)app.debugInput=false;
   if(app.tool==='hand')app.tool=app.lastPen||'pen';
   app.inputMode='smart';
