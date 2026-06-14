@@ -543,7 +543,7 @@ let saveTimer=null, thumbTimer=null, memoryFallback=null;
 let recordStream=null, recorder=null, recordChunks=[];
 let timer=null, timerLeft=25*60;
 let undoStack=[], redoStack=[];
-let pointerMap=new Map(), gesture=null, action=null;
+let pointerMap=new Map(), pointerRoleMap=new Map(), gesture=null, action=null;
 let penPointerId=null, lastPenAt=0;      // 手掌拒絕：追蹤觸控筆狀態
 let lastStroke=null;                      // 筆跡縫合：{obj,t,end} 副廠筆訊號中斷時接續上一筆
 let laserFade=null;
@@ -1588,6 +1588,47 @@ document.addEventListener('contextmenu',e=>{if(!e.target.closest('input,textarea
 document.addEventListener('selectstart',e=>{if(!e.target.closest('input,textarea,[contenteditable]'))e.preventDefault();});
 for(const ev of ['gesturestart','gesturechange','gestureend'])document.addEventListener(ev,e=>e.preventDefault());
 function distance(a,b){return Math.hypot(a.clientX-b.clientX,a.clientY-b.clientY);}
+
+/* ============ 觸控筆 / 手指 / 手掌判斷（修正版）============
+   原本完全依賴 e.width/e.height 接觸面積；某些瀏覽器、金屬筆頭、類紙膜、
+   或副廠筆會把筆回報成 pointerType='touch' 且 width/height 忽大忽小或等於 1。
+   結果：筆被誤判成手指平移，所以畫好幾次才有一次真正進入 draw。
+   修正：筆模式下，單點、小面積或未知面積的 touch 優先視為「筆觸備援」；
+        只有明顯大面積才視為手掌，雙指仍保留縮放/移動畫布。
+*/
+function contactSizeOf(e){
+  return Math.max(Number(e.width)||0,Number(e.height)||0);
+}
+function isDrawingCapableTool(){
+  return ['pen','gel','fountain','brush','pencil','marker','crayon','highlighter','eraser','laser','shape','lasso'].includes(app.tool);
+}
+function hasRealPenSignal(e){
+  return e.pointerType==='pen' ||
+    (typeof e.altitudeAngle==='number'&&e.altitudeAngle>0) ||
+    !!(Number(e.tiltX)||Number(e.tiltY));
+}
+function classifyPointerInput(e){
+  const pt=e.pointerType||'';
+  const cs=contactSizeOf(e);
+  const hasGeom=cs>1.5;
+
+  if(pt==='mouse')return 'mouse';
+  if(hasRealPenSignal(e))return 'pen';
+  if(pt!=='touch')return 'finger';
+
+  /* 明顯大接觸面積才當手掌；門檻太低會把斜握筆、類紙膜筆觸誤殺 */
+  if(hasGeom&&cs>=42)return 'palm';
+
+  const penMode=(app.inputMode||'auto')==='pen';
+  const smallOrUnknown=!hasGeom||cs<=22;
+
+  /* 重點修正：
+     筆模式 + 書寫工具 + 單點小面積/未知面積 touch => 視為觸控筆備援。
+     這能解決影片中「筆畫要試第 4、5 次才出現」的漏偵測問題。 */
+  if(penMode&&isDrawingCapableTool()&&smallOrUnknown)return 'pen';
+
+  return 'finger';
+}
 viewport.addEventListener('pointerdown',e=>{
   e.preventDefault();updateInputBadge(e.pointerType||'unknown');
   closeAllPanelsSoft();
@@ -1595,11 +1636,11 @@ viewport.addEventListener('pointerdown',e=>{
   const DRAW_KINDS=['draw','previewShape','rulerLine','laser','erase','lasso'];
   const drawTools=['pen','pencil','fountain','highlighter','eraser','laser','shape','lasso'];
   /* ── 以「接觸面積」判斷筆 / 手指 / 手掌（專業級手掌拒絕，不靠計時，永不漏筆） ── */
-  const cs=Math.max(e.width||0,e.height||0);
-  const geom=cs>1.5;                                   /* 裝置有回報真實接觸大小 */
-  const stylusLike=e.pointerType==='pen'||(e.pointerType==='touch'&&geom&&cs<=14);
-  const fingerLike=e.pointerType==='touch'&&(!geom||cs>14);
-  const palmLike=e.pointerType==='touch'&&geom&&cs>=42;
+  const pointerRole=classifyPointerInput(e);
+  pointerRoleMap.set(e.pointerId,pointerRole);
+  const stylusLike=pointerRole==='pen';
+  const fingerLike=pointerRole==='finger';
+  const palmLike=pointerRole==='palm';
   if(stylusLike){
     if((app.inputMode||'auto')==='auto'&&!app._penAutoSwitched){
       app._penAutoSwitched=true;app.inputMode='pen';updateInputModeUI();persistSoon();
@@ -1694,10 +1735,11 @@ viewport.addEventListener('pointermove',e=>{
   e.preventDefault();showEraserCursor(e);
   if(!pointerMap.has(e.pointerId)){
     /* 高傾角/抖動時系統可能用新 ID 續傳，沒有 pointerdown → 收編進進行中的筆畫 */
-    const csm=Math.max(e.width||0,e.height||0);
-    const stylusM=e.pointerType==='pen'||(e.pointerType==='touch'&&csm>1.5&&csm<=14);
+    const pointerRole=classifyPointerInput(e);
+    const stylusM=pointerRole==='pen';
     if(stylusM&&action&&action.kind==='draw'){
-      pointerMap.set(e.pointerId,e);penPointerId=e.pointerId;lastPenAt=Date.now();
+      pointerMap.set(e.pointerId,e);pointerRoleMap.set(e.pointerId,pointerRole);
+      penPointerId=e.pointerId;lastPenAt=Date.now();
       viewport.setPointerCapture?.(e.pointerId);
     }else{updateInputBadge(e.pointerType||app.lastPointerType);return;}
   }
@@ -1740,7 +1782,7 @@ function pointerEnd(e,cancelled){
     try{const last=action.obj.points[action.obj.points.length-1];const fp=samplePoint(e);
       if(!last||Math.hypot(fp.x-last.x,fp.y-last.y)>.3){action.obj.points.push(fp);renderLiveStroke();}}catch(_){}
   }
-  pointerMap.delete(e.pointerId);if(pointerMap.size<2)gesture=null;
+  pointerMap.delete(e.pointerId);pointerRoleMap.delete(e.pointerId);if(pointerMap.size<2)gesture=null;
   if(e.pointerId===penPointerId){penPointerId=null;lastPenAt=Date.now();}
   if(pointerMap.size)return;
   if(!action)return;
