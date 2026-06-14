@@ -763,76 +763,108 @@ function drawObject(c,obj,preview){
   else if(obj.type==='stamp')drawStampObject(c,obj);
   else if(obj.type==='image')drawImageObject(c,obj);
 }
-/* 每種筆有截然不同的筆觸 */
-function strokeWidths(pts,obj){
-  /* 有效壓力：真實壓力變化太小時（副廠筆常回報固定 0.5），改用書寫速度推算 */
+/* ============ 筆跡引擎（CollaNote 級平滑度） ============ */
+/* 1) 點前處理：去除過密點 + 位置指數平滑（消除手震與訊號抖動） */
+function refinePts(raw){
+  if(raw.length<3)return raw.map(p=>({x:p.x,y:p.y,p:p.p??.5}));
+  const out=[{x:raw[0].x,y:raw[0].y,p:raw[0].p??.5}];
+  for(let i=1;i<raw.length;i++){
+    const q=raw[i],last=out[out.length-1];
+    if(Math.hypot(q.x-last.x,q.y-last.y)<.7&&i<raw.length-1)continue; /* 太密 → 略過 */
+    const a=.42; /* 位置平滑 */
+    out.push({x:last.x*(1-a)+q.x*a,y:last.y*(1-a)+q.y*a,p:q.p??.5});
+  }
+  out.push({x:raw[raw.length-1].x,y:raw[raw.length-1].y,p:raw[raw.length-1].p??.5});
+  return out;
+}
+/* 2) 每點寬度：壓力或速度 → 強平滑，避免粗細跳動 */
+function widthProfile(pts,base,minK,maxK){
   const ps=pts.map(p=>p.p??.5);
   const varies=Math.max(...ps)-Math.min(...ps)>.08;
-  const out=new Array(pts.length);
-  let prev=null;
+  const out=new Array(pts.length);let prev=null;
   for(let i=0;i<pts.length;i++){
-    let p;
-    if(varies)p=ps[i];
-    else{
-      const d=i?Math.hypot(pts[i].x-pts[i-1].x,pts[i].y-pts[i-1].y):2;
-      p=Math.max(.25,Math.min(1,1.15-d/26)); /* 寫越快越細 */
-    }
-    p=prev==null?p:prev*.6+p*.4; prev=p; out[i]=p;
+    let t;
+    if(varies)t=ps[i];
+    else{const d=i?Math.hypot(pts[i].x-pts[i-1].x,pts[i].y-pts[i-1].y):2;t=Math.max(.2,Math.min(1,1.12-d/30));}
+    t=prev==null?t:prev*.78+t*.22;prev=t;       /* 寬度強平滑 */
+    out[i]=base*(minK+t*(maxK-minK));
+  }
+  /* 兩端筆鋒：頭 12%、尾 18% 漸細 */
+  const n=out.length;
+  for(let i=0;i<n;i++){
+    const headT=Math.min(1,i/Math.max(2,n*.12));
+    const tailT=Math.min(1,(n-1-i)/Math.max(2,n*.18));
+    out[i]*=(.25+.75*headT)*(.2+.8*tailT);
   }
   return out;
 }
-function ribbon(c,pts,wArr){ /* 變寬度緞帶（圓端） */
-  if(pts.length===1){c.beginPath();c.arc(pts[0].x,pts[0].y,Math.max(.6,wArr[0]/2),0,Math.PI*2);c.fill();return;}
-  for(let i=1;i<pts.length;i++){
-    const a=pts[i-1],b=pts[i],w=(wArr[i-1]+wArr[i])/2;
-    c.beginPath();c.moveTo(a.x,a.y);
-    const mx=(a.x+b.x)/2,my=(a.y+b.y)/2;
-    c.quadraticCurveTo(a.x,a.y,mx,my);c.lineTo(b.x,b.y);
-    c.lineWidth=Math.max(.6,w);c.stroke();
+/* 3) 將中心線 + 寬度展開成封閉輪廓，一次填滿 → 無接縫、無疊色斑點、自帶圓頭 */
+function strokeOutline(c,pts,wArr){
+  const n=pts.length;
+  if(n===1){c.beginPath();c.arc(pts[0].x,pts[0].y,Math.max(.5,wArr[0]/2),0,Math.PI*2);c.fill();return;}
+  const L=[],R=[];
+  for(let i=0;i<n;i++){
+    const p0=pts[Math.max(0,i-1)],p1=pts[Math.min(n-1,i+1)];
+    let dx=p1.x-p0.x,dy=p1.y-p0.y;const len=Math.hypot(dx,dy)||1;dx/=len;dy/=len;
+    const w=Math.max(.4,wArr[i])/2;
+    L.push({x:pts[i].x-dy*w,y:pts[i].y+dx*w});
+    R.push({x:pts[i].x+dy*w,y:pts[i].y-dx*w});
   }
+  c.beginPath();
+  c.moveTo(L[0].x,L[0].y);
+  for(let i=1;i<n-1;i++){const mx=(L[i].x+L[i+1].x)/2,my=(L[i].y+L[i+1].y)/2;c.quadraticCurveTo(L[i].x,L[i].y,mx,my);}
+  c.lineTo(L[n-1].x,L[n-1].y);
+  /* 尾端圓頭（以方向外推的控制點繪出，任何書寫方向都正確） */
+  {const a=pts[n-2],b=pts[n-1];let dx=b.x-a.x,dy=b.y-a.y;const l=Math.hypot(dx,dy)||1;dx/=l;dy/=l;
+   const r=Math.max(.4,wArr[n-1])/2,tx=b.x+dx*r*1.2,ty=b.y+dy*r*1.2;
+   c.quadraticCurveTo(tx,ty,R[n-1].x,R[n-1].y);}
+  for(let i=n-2;i>0;i--){const mx=(R[i].x+R[i-1].x)/2,my=(R[i].y+R[i-1].y)/2;c.quadraticCurveTo(R[i].x,R[i].y,mx,my);}
+  c.lineTo(R[0].x,R[0].y);
+  /* 頭端圓頭 */
+  {const a=pts[1],b=pts[0];let dx=b.x-a.x,dy=b.y-a.y;const l=Math.hypot(dx,dy)||1;dx/=l;dy/=l;
+   const r=Math.max(.4,wArr[0])/2,tx=b.x+dx*r*1.2,ty=b.y+dy*r*1.2;
+   c.quadraticCurveTo(tx,ty,L[0].x,L[0].y);}
+  c.closePath();c.fill();
 }
 function seededRand(seed){let t=seed>>>0;return()=>{t=(t*1664525+1013904223)>>>0;return t/4294967296;};}
 function hashId(id){let h=0;for(const ch of String(id||''))h=(h*31+ch.charCodeAt(0))>>>0;return h;}
 function drawStrokeObject(c,obj,preview){
-  const pts=obj.points||[]; if(!pts.length)return; c.save();
-  const baseA=preview?.75:(obj.opacity??1);
-  c.strokeStyle=c.fillStyle=obj.color; c.lineJoin='round';
+  const raw=obj.points||[]; if(!raw.length)return; c.save();
+  const baseA=preview?.85:(obj.opacity??1);
+  c.fillStyle=c.strokeStyle=obj.color; c.lineJoin='round';
   const W=obj.width||3;
+  const pts=refinePts(raw);
   if(obj.tool==='highlighter'){
-    /* 螢光筆：平頭、半透明、multiply 疊色 */
+    /* 螢光筆：平頭、等寬、半透明 multiply（單一路徑，疊筆不變深） */
     c.globalCompositeOperation='multiply';c.globalAlpha=Math.min(baseA,.5);
     c.lineCap='butt';c.lineWidth=W*2.2;
     c.beginPath();c.moveTo(pts[0].x,pts[0].y);
     for(let i=1;i<pts.length-1;i++){const mx=(pts[i].x+pts[i+1].x)/2,my=(pts[i].y+pts[i+1].y)/2;c.quadraticCurveTo(pts[i].x,pts[i].y,mx,my);}
     if(pts.length>1)c.lineTo(pts[pts.length-1].x,pts[pts.length-1].y);c.stroke();
   }else if(obj.tool==='fountain'){
-    /* 書法筆：明顯的粗細起伏（壓力或速度），如毛筆 / 軟尖 */
-    c.lineCap='round';c.globalAlpha=baseA;
-    const pr=strokeWidths(pts,obj);
-    ribbon(c,pts,pr.map(p=>W*(.35+p*2.1)));
+    /* 書法筆：大幅粗細起伏 + 筆鋒 */
+    c.globalAlpha=baseA;
+    strokeOutline(c,pts,widthProfile(pts,W,.3,2.3));
   }else if(obj.tool==='pencil'){
-    /* 鉛筆：石墨質感 — 半透明主線 + 細微抖動的疊線顆粒 */
-    c.lineCap='round';
-    const pr=strokeWidths(pts,obj);
-    c.globalAlpha=baseA*.55;
-    ribbon(c,pts,pr.map(p=>W*(.8+p*.5)));
+    /* 鉛筆：石墨層 + 輪廓內顆粒 */
+    c.globalAlpha=baseA*.6;
+    strokeOutline(c,pts,widthProfile(pts,W,.85,1.25));
     const rnd=seededRand(hashId(obj.id));
-    c.globalAlpha=baseA*.3;
+    c.globalAlpha=baseA*.22;c.lineCap='round';c.lineWidth=Math.max(.5,W*.35);
     for(let pass=0;pass<2;pass++){
-      const j=()=>(rnd()-.5)*W*.9;
+      const j=()=>(rnd()-.5)*W*.75;
       c.beginPath();c.moveTo(pts[0].x+j(),pts[0].y+j());
       for(let i=1;i<pts.length;i++)c.lineTo(pts[i].x+j(),pts[i].y+j());
-      c.lineWidth=Math.max(.5,W*.4);c.stroke();
+      c.stroke();
     }
   }else if(obj.tool==='laser'){
     c.lineCap='round';c.globalAlpha=baseA;c.shadowColor=obj.color;c.shadowBlur=8;c.lineWidth=W;
     c.beginPath();c.moveTo(pts[0].x,pts[0].y);
     for(let i=1;i<pts.length;i++)c.lineTo(pts[i].x,pts[i].y);c.stroke();
   }else{
-    /* 鋼筆（原子筆）：滑順曲線、輕微壓力變化、實心 */
-    c.lineCap='round';c.globalAlpha=baseA;
-    const pr=strokeWidths(pts,obj);
-    ribbon(c,pts,pr.map(p=>W*(.78+p*.45)));
+    /* 鋼筆：近等寬 + 細緻筆鋒，墨水般滑順 */
+    c.globalAlpha=baseA;
+    strokeOutline(c,pts,widthProfile(pts,W,.88,1.12));
   }
   c.restore();
 }
@@ -955,7 +987,12 @@ function updateUndoUI(){$('#undoBtn').style.opacity=undoStack.length?1:.4;$('#re
 
 /* ============ 主渲染 ============ */
 function renderObjects(){const p=activePage();ctx.clearRect(0,0,PAGE_W,PAGE_H);if(!p)return;
-  for(const obj of p.objects)drawObject(ctx,obj,false);}
+  const liveId=action&&action.kind==='draw'?action.obj.id:null;
+  for(const obj of p.objects){if(obj.id!==liveId)drawObject(ctx,obj,false);}}
+function renderLiveStroke(){ /* 書寫中只重繪進行中的這一筆（畫在 overlay），其餘不動 */
+  ov.clearRect(0,0,PAGE_W,PAGE_H);
+  if(action&&action.kind==='draw')drawObject(ov,action.obj,false);
+}
 function renderOverlay(){
   ov.clearRect(0,0,PAGE_W,PAGE_H);
   const sel=getSelectedObjects();
@@ -1398,7 +1435,7 @@ viewport.addEventListener('pointerdown',e=>{
       penPointerId=e.pointerId;lastPenAt=now;
       pointerMap.set(e.pointerId,e);viewport.setPointerCapture?.(e.pointerId);
       const pos0=clampPoint({...clientToPage(e.clientX,e.clientY),p:e.pressure||.5});
-      action.obj.points.push(pos0);renderObjects();return;
+      action.obj.points.push(pos0);renderObjects();renderLiveStroke();return;
     }
     penPointerId=e.pointerId;lastPenAt=now;
     for(const [id,p] of pointerMap){if(p.pointerType==='touch')pointerMap.delete(id);}
@@ -1436,7 +1473,7 @@ viewport.addEventListener('pointerdown',e=>{
     const d=Math.hypot(pos.x-lastStroke.end.x,pos.y-lastStroke.end.y);
     if(d<16+30/app.zoom){
       action={kind:'draw',obj:lastStroke.obj,stitched:true};
-      action.obj.points.push(pos);lastStroke=null;renderObjects();return;
+      action.obj.points.push(pos);lastStroke=null;renderObjects();renderLiveStroke();return;
     }
   }
   const hand=app.tool==='hand'||keys.space||e.button===1||isPenOnlyTouch(e);
@@ -1477,7 +1514,7 @@ viewport.addEventListener('pointerdown',e=>{
       width:app.tool==='highlighter'?app.width*3:app.width,opacity:app.tool==='highlighter'?.45:app.opacity,p1:pos,p2:pos}};
     renderOverlay();return;
   }
-  pushUndo();action={kind:'draw',obj:currentStroke([pos])};activePage().objects.push(action.obj);renderObjects();
+  pushUndo();action={kind:'draw',obj:currentStroke([pos])};activePage().objects.push(action.obj);renderObjects();renderLiveStroke();
 });
 viewport.addEventListener('pointermove',e=>{
   e.preventDefault();showEraserCursor(e);
@@ -1509,7 +1546,7 @@ viewport.addEventListener('pointermove',e=>{
   if(action.kind==='draw'){
     const evs=e.getCoalescedEvents?e.getCoalescedEvents():[e];
     for(const ev of evs)action.obj.points.push(clampPoint({...clientToPage(ev.clientX,ev.clientY),p:ev.pressure||.5}));
-    renderObjects();
+    renderLiveStroke();
   }
 });
 function pointerEnd(e,cancelled){
@@ -1529,7 +1566,7 @@ function pointerEnd(e,cancelled){
     if(len>2){pushUndo();activePage().objects.push(o);activePage().updatedAt=Date.now();persistSoon();scheduleThumbs();}
     renderObjects();renderOverlay();
   }
-  if(a.kind==='draw'){activePage().updatedAt=Date.now();persistSoon();scheduleThumbs();}
+  if(a.kind==='draw'){renderObjects();renderOverlay();activePage().updatedAt=Date.now();persistSoon();scheduleThumbs();}
   if(a.kind==='moveSelection'||a.kind==='scaleSelection'){activePage().updatedAt=Date.now();persistSoon();scheduleThumbs();renderOverlay();}
   if(a.kind==='erase'){
     renderOverlay();
