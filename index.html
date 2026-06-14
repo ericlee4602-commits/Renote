@@ -181,8 +181,8 @@ body.dark .mswatch{border-color:rgba(50,42,36,.9)}
   padding:16px;z-index:240;display:none;flex-direction:column;gap:13px;width:min(330px,92vw);animation:pop .18s ease}
 .popover.show{display:flex}
 .popover h4{margin:0;font-size:12px;letter-spacing:.14em;text-transform:uppercase;color:var(--muted)}
-.pal{display:grid;grid-template-columns:repeat(8,1fr);gap:8px}
-.pal .swatch{aspect-ratio:1;border-radius:50%;border:2.5px solid rgba(255,255,255,.85);box-shadow:0 0 0 1px var(--line);cursor:pointer;transition:.13s}
+.pal{display:grid;grid-template-columns:repeat(9,1fr);gap:6px;max-height:188px;overflow-y:auto;padding:2px;scrollbar-width:thin}
+.pal .swatch{aspect-ratio:1;border-radius:50%;border:2px solid rgba(255,255,255,.85);box-shadow:0 0 0 1px var(--line);cursor:pointer;transition:.1s}
 body.dark .pal .swatch{border-color:rgba(50,42,36,.9)}
 .pal .swatch.active{transform:scale(1.18);box-shadow:0 0 0 2px var(--sel)}
 .slider-row{display:flex;align-items:center;gap:10px}
@@ -442,20 +442,21 @@ body.dark .pal .swatch{border-color:rgba(50,42,36,.9)}
 </div>
 
 <div class="drawer" id="audioPanel">
-  <h3>本頁錄音 <button data-close="audioPanel">✕</button></h3>
-  <div class="modal-row" style="display:flex;gap:8px">
+  <h3>錄音 + 筆記同步 <button data-close="audioPanel">✕</button></h3>
+  <p class="small" style="margin:-2px 0 8px">邊錄音邊寫，回放時筆跡會依當時書寫順序逐一亮起；開「點按定位」後，點任一筆跡即可跳到當時的錄音。</p>
+  <div class="modal-row" style="display:flex;gap:8px;align-items:center">
     <button class="pillbtn primary" id="recordBtn">● 開始錄音</button>
     <button class="pillbtn" id="stopRecordBtn" disabled>■ 停止</button>
+    <span class="small" id="recTimer" style="margin-left:auto;font-variant-numeric:tabular-nums"></span>
   </div>
-  <div id="recordings" style="display:flex;flex-direction:column;gap:8px"></div>
+  <div id="recordings" style="display:flex;flex-direction:column;gap:10px;margin-top:10px"></div>
 </div>
 
 <!-- 更多選單 -->
 <div class="popover" id="morePop" style="width:min(290px,92vw)">
   <h4>觸控筆 / 螢幕</h4>
-  <div class="chip-row" id="nibChips"></div>
-  <div class="slider-row" style="margin-top:7px"><label class="small" style="min-width:52px">傾角靈敏</label><input type="range" id="tiltRange" min="0" max="1" step="0.05"><span class="val" id="tiltVal">中</span></div>
-  <div class="slider-row"><label class="small" style="min-width:52px">防抖平滑</label><input type="range" id="smoothRange" min="0" max="1" step="0.05"><span class="val" id="smoothVal">中</span></div>
+  <p class="small" id="nibStatus" style="margin:2px 0 6px">偵測中…</p>
+  <div class="slider-row" style="margin-top:4px"><label class="small" style="min-width:52px">傾角靈敏</label><input type="range" id="tiltRange" min="0" max="1" step="0.05"><span class="val" id="tiltVal">中</span></div>
   <h4>頁面紙樣</h4>
   <div class="chip-row" id="templateChips"></div>
   <h4>匯出</h4>
@@ -547,8 +548,21 @@ let penPointerId=null, lastPenAt=0;      // 手掌拒絕：追蹤觸控筆狀態
 let lastStroke=null;                      // 筆跡縫合：{obj,t,end} 副廠筆訊號中斷時接續上一筆
 let laserFade=null;
 
-const COLORS=['#3f352f','#7d675e','#546a5e','#5d6f8e','#b56b5b','#c69a56','#8a6b8f','#b07a8c',
-  '#7f9079','#6d8f91','#d3a173','#8b9199','#1f2937','#9a3412','#1d4ed8','#15803d'];
+const COLORS=[
+  /* 中性 / 墨色 */
+  '#000000','#3f3f46','#6b7280','#9ca3af','#d1d5db','#ffffff',
+  /* 紅 */ '#7f1d1d','#b91c1c','#ef4444','#f87171','#fca5a5',
+  /* 橙 */ '#7c2d12','#c2410c','#f97316','#fb923c','#fdba74',
+  /* 黃 */ '#854d0e','#ca8a04','#eab308','#facc15','#fde047',
+  /* 綠 */ '#14532d','#15803d','#22c55e','#4ade80','#86efac',
+  /* 青 */ '#134e4a','#0d9488','#14b8a6','#2dd4bf','#5eead4',
+  /* 藍 */ '#1e3a8a','#1d4ed8','#3b82f6','#60a5fa','#93c5fd',
+  /* 靛 */ '#312e81','#4338ca','#6366f1','#818cf8','#a5b4fc',
+  /* 紫 */ '#581c87','#7e22ce','#a855f7','#c084fc','#d8b4fe',
+  /* 粉 */ '#831843','#be185d','#ec4899','#f472b6','#f9a8d4',
+  /* 棕 / 暖筆記色 */ '#3f352f','#7d675e','#a8825f','#c69a56','#d3a173',
+  /* 大地 */ '#546a5e','#7f9079','#6d8f91','#5d6f8e','#8a6b8f'
+];
 const COVER_COLORS=[['#8a6b5a','#6d5446'],['#5d6f8e','#46546e'],['#7f9079','#60705c'],['#b07a8c','#8d5f70'],
   ['#c69a56','#a37c3f'],['#6d8f91','#527073'],['#8a6b8f','#6c5270'],['#43372e','#2e2620']];
 const WIDTH_PRESETS=[2,4,7,12];
@@ -721,6 +735,27 @@ function setZoom(z,cx,cy){
   const mx=cx!=null?cx:rect.width/2, my=cy!=null?cy:rect.height/2;
   const old=app.zoom; app.zoom=Math.max(.22,Math.min(5,z)); const f=app.zoom/old;
   app.panX=mx-(mx-app.panX)*f; app.panY=my-(my-app.panY)*f; applyTransform(); scheduleQuality();
+}
+/* 絲滑縮放動畫（按鈕 / 雙擊用）：對焦點縮放 + ease-out */
+let zoomAnim=null;
+function animateZoom(targetZoom,cx,cy){
+  const rect=viewport.getBoundingClientRect();
+  const mx=cx!=null?cx:rect.width/2, my=cy!=null?cy:rect.height/2;
+  targetZoom=Math.max(.22,Math.min(5,targetZoom));
+  const z0=app.zoom,x0=app.panX,y0=app.panY;
+  /* 計算終點 pan，使對焦點固定 */
+  const f=targetZoom/z0;
+  const x1=mx-(mx-x0)*f, y1=my-(my-y0)*f;
+  if(Math.abs(targetZoom-z0)<.001){return;}
+  if(zoomAnim)cancelAnimationFrame(zoomAnim);
+  const t0=performance.now(),dur=260;
+  const ease=t=>1-Math.pow(1-t,3);
+  (function step(now){
+    let t=Math.min(1,(now-t0)/dur);const k=ease(t);
+    app.zoom=z0+(targetZoom-z0)*k;app.panX=x0+(x1-x0)*k;app.panY=y0+(y1-y0)*k;
+    applyTransform();
+    if(t<1)zoomAnim=requestAnimationFrame(step);else{zoomAnim=null;scheduleQuality();}
+  })(t0);
 }
 function clientToPage(x,y){const r=wrap.getBoundingClientRect(); return {x:(x-r.left)/app.zoom,y:(y-r.top)/app.zoom};}
 function pageToClient(x,y){const vr=viewport.getBoundingClientRect(), wr=wrap.getBoundingClientRect(); return {x:wr.left-vr.left+x*app.zoom,y:wr.top-vr.top+y*app.zoom};}
@@ -1007,6 +1042,7 @@ function boundsOfObjects(objs){const bs=objs.map(objectBounds).filter(Boolean);i
   return {x:x1,y:y1,w:x2-x1,h:y2-y1};}
 function getSelectedObjects(){const p=activePage();return p?p.objects.filter(o=>app.selectedIds.includes(o.id)):[];}
 function pointInRect(pt,b){return b&&pt.x>=b.x&&pt.x<=b.x+b.w&&pt.y>=b.y&&pt.y<=b.y+b.h;}
+function inflate(b,m){return b?{x:b.x-m,y:b.y-m,w:b.w+2*m,h:b.h+2*m}:b;}
 function distToSegment(p,a,b){const vx=b.x-a.x,vy=b.y-a.y,wx=p.x-a.x,wy=p.y-a.y;const c1=vx*wx+vy*wy;
   if(c1<=0)return Math.hypot(p.x-a.x,p.y-a.y);const c2=vx*vx+vy*vy;if(c2<=c1)return Math.hypot(p.x-b.x,p.y-b.y);
   const t=c1/c2;return Math.hypot(p.x-(a.x+t*vx),p.y-(a.y+t*vy));}
@@ -1056,19 +1092,37 @@ function recolorSelected(color){if(!app.selectedIds.length)return false;pushUndo
   getSelectedObjects().forEach(o=>{if(o.type!=='image')o.color=color;});renderAll();persistSoon();scheduleThumbs();return true;}
 
 /* ============ Undo / Redo ============ */
-function pageSnapshot(){const p=activePage();return JSON.stringify({objects:p.objects,template:p.template,bookmarked:p.bookmarked});}
-function restoreSnapshot(raw){const p=activePage();const d=JSON.parse(raw);
-  p.objects=d.objects||[];p.template=d.template||p.template;p.bookmarked=!!d.bookmarked;
-  app.selectedIds=[];renderAll();renderSidebar();persistSoon();scheduleThumbs();}
-function pushUndo(){undoStack.push(pageSnapshot());if(undoStack.length>80)undoStack.shift();redoStack=[];updateUndoUI();}
-function undo(){if(!undoStack.length)return;lastStroke=null;redoStack.push(pageSnapshot());restoreSnapshot(undoStack.pop());updateUndoUI();}
-function redo(){if(!redoStack.length)return;lastStroke=null;undoStack.push(pageSnapshot());restoreSnapshot(redoStack.pop());updateUndoUI();}
+function snapOf(p){return JSON.stringify({objects:p.objects,template:p.template,bookmarked:p.bookmarked});}
+function restoreTo(p,raw){const d=JSON.parse(raw);p.objects=d.objects||[];p.template=d.template||p.template;p.bookmarked=!!d.bookmarked;}
+function afterEdit(p){app.selectedIds=[];if(p===activePage())renderAll();renderSidebar();persistSoon();scheduleThumbs();}
+function pushCmd(c){undoStack.push(c);if(undoStack.length>150)undoStack.shift();redoStack=[];updateUndoUI();}
+/* 快取相容：舊式快照（用於擦除/移動/縮放/刪除/換色/紙樣/文字等較少見操作） */
+function pushUndo(){const pg=activePage();const before=snapOf(pg);
+  pushCmd({undo(){this.after=snapOf(pg);restoreTo(pg,before);afterEdit(pg);},
+           redo(){if(this.after!=null)restoreTo(pg,this.after);afterEdit(pg);}});}
+/* O(1) 新增指令（書寫主路徑：下筆時不做整頁序列化 → 永不卡頓） */
+function pushAdd(obj){const pg=activePage();
+  pushCmd({undo(){pg.objects=pg.objects.filter(o=>o.id!==obj.id);afterEdit(pg);},
+           redo(){if(!pg.objects.some(o=>o.id===obj.id))pg.objects.push(obj);afterEdit(pg);}});}
+function undo(){if(!undoStack.length)return;lastStroke=null;const c=undoStack.pop();c.undo();redoStack.push(c);updateUndoUI();}
+function redo(){if(!redoStack.length)return;lastStroke=null;const c=redoStack.pop();c.redo();undoStack.push(c);updateUndoUI();}
 function updateUndoUI(){$('#undoBtn').style.opacity=undoStack.length?1:.4;$('#redoBtn').style.opacity=redoStack.length?1:.4;}
 
 /* ============ 主渲染 ============ */
 function renderObjects(){const p=activePage();ctx.clearRect(0,0,PAGE_W,PAGE_H);if(!p)return;
   const liveId=action&&action.kind==='draw'?action.obj.id:null;
-  for(const obj of p.objects){if(obj.id!==liveId)drawObject(ctx,obj,false);}}
+  const pt=app._playT; /* 同步回放：依錄音時間顯示書寫進度 */
+  for(const obj of p.objects){
+    if(obj.id===liveId)continue;
+    if(pt!=null&&obj.at!=null){
+      if(obj.at>pt+40){ctx.save();ctx.globalAlpha=.12;drawObject(ctx,obj,false);ctx.restore();continue;}
+      if(obj.at>pt-260){ctx.save();drawObject(ctx,obj,false);
+        /* 剛寫到的筆畫高亮一下 */
+        ctx.globalCompositeOperation='source-atop';ctx.globalAlpha=.25;ctx.fillStyle='#fde047';
+        const b=objectBounds(obj);if(b)ctx.fillRect(b.x-4,b.y-4,b.w+8,b.h+8);ctx.restore();continue;}
+    }
+    drawObject(ctx,obj,false);
+  }}
 function renderLiveStroke(){ /* 書寫中只重繪進行中的這一筆（畫在 overlay），其餘不動 */
   ov.clearRect(0,0,PAGE_W,PAGE_H);
   if(action&&action.kind==='draw')drawObject(ov,action.obj,false);
@@ -1172,7 +1226,7 @@ function openNotebook(id){
   $('#library').classList.add('hidden');$('#editor').classList.remove('hidden');
   renderSidebar();renderAll();fitPage();persistSoon();
 }
-function backToLibrary(){
+function backToLibrary(){if(typeof stopSyncPlayback==='function')stopSyncPlayback();app._seekRec=null;app._playT=null;
   app.view='library';$('#library').classList.remove('hidden');$('#editor').classList.add('hidden');
   closeAllPanels();renderLibrary();persistSoon();
 }
@@ -1204,7 +1258,7 @@ async function deletePage(){const nb=activeNotebook();
 function movePage(dir){const nb=activeNotebook();const i=pageIndex();const j=i+dir;
   if(j<0||j>=nb.pages.length)return;
   [nb.pages[i],nb.pages[j]]=[nb.pages[j],nb.pages[i]];renderSidebar();persistSoon();}
-function gotoPage(dir){const nb=activeNotebook();const i=pageIndex();const j=i+dir;
+function gotoPage(dir){if(typeof stopSyncPlayback==='function'){stopSyncPlayback();}app._seekRec=null;const nb=activeNotebook();const i=pageIndex();const j=i+dir;
   if(j<0||j>=nb.pages.length)return;setActivePage(nb.pages[j].id);}
 
 /* ============ 側欄縮圖 ============ */
@@ -1371,8 +1425,11 @@ function buildToolStrip(){
     b.onclick=()=>{app.width=w;renderToolUI();persistSoon();};wd.appendChild(b);});
   // 彈窗內容
   const pal=$('#colorPalette');pal.innerHTML='';
-  COLORS.forEach(c=>{const b=document.createElement('button');b.className='swatch';b.dataset.color=c;b.style.background=c;b.title=c;
-    b.onclick=()=>{app.color=c;if(app.selectedIds.length)recolorSelected(c);renderToolUI();persistSoon();};pal.appendChild(b);});
+  const recents=(app.recentColors||[]);
+  const list=recents.length?recents.concat(COLORS.filter(c=>!recents.includes(c))):COLORS;
+  list.forEach(c=>{const b=document.createElement('button');b.className='swatch';b.dataset.color=c;b.style.background=c;b.title=c;
+    b.onclick=()=>{app.color=c;app.recentColors=[c].concat((app.recentColors||[]).filter(x=>x!==c)).slice(0,9);
+      if(app.selectedIds.length)recolorSelected(c);renderToolUI();persistSoon();};pal.appendChild(b);});
   const sc=$('#shapeChips');sc.innerHTML='';
   SHAPES.forEach(([id,lbl])=>{const b=document.createElement('button');b.className='chip';b.dataset.shape=id;b.textContent=lbl;
     b.onclick=()=>{app.shape=id;renderToolUI();persistSoon();};sc.appendChild(b);});
@@ -1395,26 +1452,35 @@ function renderStickerGrid(){
     b.classList.toggle('active',app.stamp===s);
     b.onclick=()=>{app.stamp=s;renderStickerGrid();persistSoon();toast('貼紙：'+s+'，點畫布即可貼上');};g.appendChild(b);});
 }
-const NIB_PRESETS=[
-  ['standard','一般筆頭',{tilt:.5,smooth:.45}],
-  ['paper','類紙膜',{tilt:.55,smooth:.78}],
-  ['metal','金屬筆頭',{tilt:.45,smooth:.82}],
-  ['hard','硬筆尖',{tilt:.4,smooth:.55}]
-];
+/* 自動偵測筆頭/螢幕特性 → 自動決定防抖平滑強度（不再給選項） */
+let _detect={samples:0,zeroPress:0,constPress:0,jitter:0,lastP:null,lastXY:null,jitterAcc:0,decided:false,kind:'偵測中'};
+function feedDetector(pt,ev){
+  const d=_detect;d.samples++;
+  const pr=ev?ev.pressure:null;
+  if(pr==null||isNaN(pr)||pr<=0)d.zeroPress++;
+  if(d.lastP!=null&&Math.abs((pr||0)-d.lastP)<.004)d.constPress++;
+  d.lastP=pr||0;
+  /* 抖動：相對於直線運動的橫向偏移累積 */
+  if(d.lastXY){const dx=pt.x-d.lastXY.x,dy=pt.y-d.lastXY.y;d.jitterAcc+=Math.abs(dx)+Math.abs(dy)<.5?1:0;}
+  d.lastXY={x:pt.x,y:pt.y};
+  if(d.samples>=60&&!d.decided)decideNib();
+}
+function decideNib(){
+  const d=_detect;d.decided=true;
+  const zr=d.zeroPress/d.samples, cr=d.constPress/d.samples;
+  let smooth=.45,kind='一般筆頭';
+  if(zr>.6){smooth=.82;kind='金屬筆頭（無壓力訊號）';}      /* 幾乎沒有壓力資料 → 金屬筆頭 */
+  else if(cr>.7){smooth=.78;kind='類紙膜 / 硬質筆尖';}        /* 壓力幾乎不變 → 類紙膜或硬筆尖 */
+  else{smooth=.5;kind='標準壓感筆';}
+  app.smoothSens=smooth;app._autoNib=kind;persistSoon();
+  const el=$('#nibStatus');if(el)el.textContent='已自動偵測：'+kind;
+}
 function renderInputSettings(){
   if(app.tiltSens==null)app.tiltSens=.5;
-  if(app.smoothSens==null)app.smoothSens=.45;
-  const wrap=$('#nibChips');if(wrap){wrap.innerHTML='';
-    NIB_PRESETS.forEach(([id,lbl,v])=>{
-      const b=document.createElement('button');b.className='chip';b.textContent=lbl;
-      b.classList.toggle('active',app.nib===id);
-      b.onclick=()=>{app.nib=id;app.tiltSens=v.tilt;app.smoothSens=v.smooth;renderInputSettings();persistSoon();toast('已套用「'+lbl+'」最佳化');};
-      wrap.appendChild(b);
-    });
-  }
+  if(app.smoothSens==null)app.smoothSens=.5;
+  const el=$('#nibStatus');if(el)el.textContent=app._autoNib?('已自動偵測：'+app._autoNib):'書寫幾筆後自動偵測…';
   const lvl=v=>v<.34?'低':v<.67?'中':'高';
   if($('#tiltRange')){$('#tiltRange').value=app.tiltSens;$('#tiltVal').textContent=lvl(app.tiltSens);}
-  if($('#smoothRange')){$('#smoothRange').value=app.smoothSens;$('#smoothVal').textContent=lvl(app.smoothSens);}
 }
 function renderTemplateChips(){
   const tc=$('#templateChips');tc.innerHTML='';
@@ -1514,7 +1580,7 @@ function snapShapePoint(p1,p2){
   const sa=Math.round(a/step)*step;const d=Math.hypot(p2.x-p1.x,p2.y-p1.y);
   return {x:p1.x+d*Math.cos(sa),y:p1.y+d*Math.sin(sa),p:p2.p||.5};
 }
-function currentStroke(points){return {id:uid('obj'),type:'stroke',tool:app.tool,color:app.color,width:Number(app.width),opacity:Number(app.opacity),tilt:app.tiltSens??.5,smooth:app.smoothSens??.5,points:points||[]};}
+function currentStroke(points){const o={id:uid('obj'),type:'stroke',tool:app.tool,color:app.color,width:Number(app.width),opacity:Number(app.opacity),tilt:app.tiltSens??.5,smooth:app.smoothSens??.5,points:points||[]};if(app._recStart)o.at=Date.now()-app._recStart;return o;}
 
 /* ============ 指標事件 ============ */
 /* iOS：禁止長按選字泡泡、放大鏡與系統雙指縮放頁面 */
@@ -1582,6 +1648,12 @@ viewport.addEventListener('pointerdown',e=>{
       action.obj.points.push(pos);lastStroke=null;renderObjects();renderLiveStroke();return;
     }
   }
+  /* Notability 式點按定位：開啟後點筆跡 → 跳到當時錄音 */
+  if(app._seekRec){
+    const hit=[...activePage().objects].reverse().find(o=>o.at!=null&&pointInRect(pos,inflate(objectBounds(o),10)));
+    if(hit){const a=app._seekRec.audio;try{a.currentTime=Math.max(0,hit.at/1000);a.play();}catch(_){}
+      pointerMap.delete(e.pointerId);toast('▶ 跳到 '+fmtTime(hit.at/1000));return;}
+  }
   const hand=app.tool==='hand'||keys.space||e.button===1||isPenOnlyTouch(e);
   if(hand){action={kind:'pan',last:{x:e.clientX,y:e.clientY}};return;}
   if(app.tool==='text'){
@@ -1620,7 +1692,7 @@ viewport.addEventListener('pointerdown',e=>{
       width:app.tool==='highlighter'?app.width*3:app.width,opacity:app.tool==='highlighter'?.45:app.opacity,p1:pos,p2:pos}};
     renderOverlay();return;
   }
-  pushUndo();action={kind:'draw',obj:currentStroke([pos])};activePage().objects.push(action.obj);renderObjects();renderLiveStroke();
+  action={kind:'draw',obj:currentStroke([pos])};activePage().objects.push(action.obj);renderObjects();renderLiveStroke();
 });
 viewport.addEventListener('pointermove',e=>{
   e.preventDefault();showEraserCursor(e);
@@ -1657,10 +1729,13 @@ viewport.addEventListener('pointermove',e=>{
   if(action.kind==='laser'){action.obj.points.push(pos);if(action.obj.points.length>70)action.obj.points.shift();renderOverlay();return;}
   if(action.kind==='draw'){
     const evs=e.getCoalescedEvents?e.getCoalescedEvents():[e];
-    for(const ev of evs)action.obj.points.push(samplePoint(ev));
-    renderLiveStroke();
+    for(const ev of evs){const sp=samplePoint(ev);action.obj.points.push(sp);if(ev.pointerType==='pen'&&!_detect.decided)feedDetector(sp,ev);}
+    requestLiveRender();
   }
 });
+/* rAF 渲染排程：輸入只負責收點（極快），畫面在下一影格才重繪 → 不掉幀、下筆即時 */
+let liveRAF=null;
+function requestLiveRender(){if(liveRAF)return;liveRAF=requestAnimationFrame(()=>{liveRAF=null;renderLiveStroke();});}
 function pointerEnd(e,cancelled){
   /* 補上抬筆瞬間的最後一點 → 筆畫不會收尾過短而留下間隙 */
   if(action&&action.kind==='draw'&&!cancelled&&(e.pointerType!=='mouse'||e.buttons===0)){
@@ -1683,7 +1758,7 @@ function pointerEnd(e,cancelled){
     if(len>2){pushUndo();activePage().objects.push(o);activePage().updatedAt=Date.now();persistSoon();scheduleThumbs();}
     renderObjects();renderOverlay();
   }
-  if(a.kind==='draw'){drawObject(ctx,a.obj,false);renderOverlay();activePage().updatedAt=Date.now();persistSoon();scheduleThumbs();}
+  if(a.kind==='draw'){if(!a.stitched)pushAdd(a.obj);drawObject(ctx,a.obj,false);renderOverlay();activePage().updatedAt=Date.now();persistSoon();scheduleThumbs();}
   if(a.kind==='moveSelection'||a.kind==='scaleSelection'){activePage().updatedAt=Date.now();persistSoon();scheduleThumbs();renderOverlay();}
   if(a.kind==='erase'){
     renderOverlay();
@@ -1820,40 +1895,84 @@ function handleImport(file){
 }
 
 /* ============ 錄音 ============ */
+function pickAudioMime(){
+  const cands=['audio/mp4','audio/aac','audio/mpeg','audio/webm;codecs=opus','audio/webm'];
+  if(window.MediaRecorder&&MediaRecorder.isTypeSupported)
+    for(const m of cands)if(MediaRecorder.isTypeSupported(m))return m;
+  return '';
+}
+let recTimerInt=null;
 async function startRecording(){
+  if(!navigator.mediaDevices||!navigator.mediaDevices.getUserMedia){toast('此瀏覽器不支援錄音；請用 Safari 並從主畫面開啟');return;}
   try{
     recordStream=await navigator.mediaDevices.getUserMedia({audio:true});
-    recordChunks=[];recorder=new MediaRecorder(recordStream);
-    recorder.ondataavailable=e=>{if(e.data.size)recordChunks.push(e.data);};
-    recorder.onstop=saveRecording;recorder.start();
+    const mime=pickAudioMime();
+    recordChunks=[];
+    recorder=mime?new MediaRecorder(recordStream,{mimeType:mime}):new MediaRecorder(recordStream);
+    recorder.ondataavailable=e=>{if(e.data&&e.data.size)recordChunks.push(e.data);};
+    recorder.onstop=()=>saveRecording(recorder.mimeType||mime||'audio/mp4');
+    recorder.start(250);
+    app._recStart=Date.now();           /* 書寫時間軸起點（供同步） */
     $('#recordBtn').disabled=true;$('#stopRecordBtn').disabled=false;
-    $('#audioBtn').classList.add('active');toast('錄音中…');
-  }catch(e){toast('麥克風權限未開啟或瀏覽器不支援');}
+    $('#audioBtn').classList.add('active');$('#timerBadge')&&0;
+    recTimerInt=setInterval(()=>{const el=$('#recTimer');if(el)el.textContent='● '+fmtTime((Date.now()-app._recStart)/1000);},250);
+    toast('錄音中…邊寫邊錄，筆跡會自動標記時間');
+  }catch(e){toast('麥克風權限未開啟，或瀏覽器不支援錄音');}
 }
 function stopRecording(){
   if(recorder&&recorder.state!=='inactive')recorder.stop();
   if(recordStream)recordStream.getTracks().forEach(t=>t.stop());
+  clearInterval(recTimerInt);const el=$('#recTimer');if(el)el.textContent='';
   $('#recordBtn').disabled=false;$('#stopRecordBtn').disabled=true;
   $('#audioBtn').classList.remove('active');
 }
-function saveRecording(){
-  const blob=new Blob(recordChunks,{type:'audio/webm'});
+function fmtTime(sec){sec=Math.max(0,Math.floor(sec));return Math.floor(sec/60)+':'+String(sec%60).padStart(2,'0');}
+function saveRecording(mime){
+  const dur=app._recStart?(Date.now()-app._recStart):0;app._recStart=null;
+  if(!recordChunks.length){toast('沒有錄到聲音');return;}
+  const blob=new Blob(recordChunks,{type:mime});
   const r=new FileReader();
   r.onload=()=>{const p=activePage();p.recordings=p.recordings||[];
-    p.recordings.push({id:uid('rec'),src:r.result,createdAt:Date.now()});
-    renderRecordings();persistSoon();toast('錄音已附加到本頁');};
+    p.recordings.push({id:uid('rec'),src:r.result,createdAt:Date.now(),dur});
+    renderRecordings();persistSoon();toast('錄音已附加，可同步回放 🎧');};
   r.readAsDataURL(blob);
+}
+/* 同步回放狀態 */
+let syncPlay={audio:null,rec:null,raf:null,seekMode:false};
+function stopSyncPlayback(){
+  if(syncPlay.audio){syncPlay.audio.pause();}
+  if(syncPlay.raf)cancelAnimationFrame(syncPlay.raf);
+  syncPlay.raf=null;app._playT=null;renderObjects();renderOverlay();
+}
+function startSyncPlayback(rec,audioEl){
+  syncPlay.rec=rec;syncPlay.audio=audioEl;
+  const tick=()=>{
+    app._playT=audioEl.currentTime*1000;
+    renderObjects();           /* 依時間顯示已寫到哪 */
+    if(!audioEl.paused&&!audioEl.ended)syncPlay.raf=requestAnimationFrame(tick);
+    else{app._playT=null;renderObjects();}
+  };
+  syncPlay.raf=requestAnimationFrame(tick);
 }
 function renderRecordings(){
   const box=$('#recordings');if(!box)return;
   const recs=(activePage()&&activePage().recordings)||[];box.innerHTML='';
-  if(!recs.length){box.innerHTML='<p class="small">本頁還沒有錄音。錄音會跟著頁面一起保存。</p>';return;}
+  if(!recs.length){box.innerHTML='<p class="small">本頁尚無錄音。按「開始錄音」並同時書寫，即可建立同步筆記。</p>';return;}
   recs.forEach((r,i)=>{
     const d=document.createElement('div');d.className='rec-item';
-    d.innerHTML='<div class="rrow"><span class="small">錄音 '+(i+1)+' · '+new Date(r.createdAt).toLocaleString()+'</span>'+
-      '<button class="iconbtn danger" style="width:32px;height:32px">'+icon('trash')+'</button></div><audio controls></audio>';
-    d.querySelector('audio').src=r.src;
-    d.querySelector('button').onclick=()=>{activePage().recordings=activePage().recordings.filter(x=>x.id!==r.id);renderRecordings();persistSoon();};
+    d.innerHTML='<div class="rrow" style="display:flex;align-items:center;gap:8px">'+
+      '<span class="small">🎧 錄音 '+(i+1)+(r.dur?' · '+fmtTime(r.dur/1000):'')+'</span>'+
+      '<label class="small" style="margin-left:auto;display:flex;align-items:center;gap:4px"><input type="checkbox" class="seekchk">點按定位</label>'+
+      '<button class="iconbtn danger" style="width:32px;height:32px">'+icon('trash')+'</button></div>'+
+      '<audio controls preload="metadata" style="width:100%;margin-top:6px"></audio>';
+    const audio=d.querySelector('audio');audio.src=r.src;
+    audio.addEventListener('play',()=>{stopSyncPlayback();startSyncPlayback(r,audio);});
+    audio.addEventListener('pause',()=>{if(syncPlay.raf)cancelAnimationFrame(syncPlay.raf);});
+    audio.addEventListener('seeking',()=>{app._playT=audio.currentTime*1000;renderObjects();});
+    audio.addEventListener('ended',()=>{app._playT=null;renderObjects();});
+    d.querySelector('.seekchk').onchange=e=>{app._seekRec=e.target.checked?{rec:r,audio:audio}:null;
+      toast(e.target.checked?'點按筆跡 → 跳到當時錄音':'已關閉點按定位');};
+    d.querySelector('button').onclick=()=>{activePage().recordings=activePage().recordings.filter(x=>x.id!==r.id);if(app._seekRec&&app._seekRec.rec.id===r.id)app._seekRec=null;stopSyncPlayback();renderRecordings();persistSoon();};
     box.appendChild(d);
   });
 }
@@ -1990,10 +2109,10 @@ function bindUI(){
   /* 導航與縮放 */
   $('#prevPage').onclick=()=>gotoPage(-1);
   $('#nextPage').onclick=()=>gotoPage(1);
-  $('#zoomIn').onclick=()=>setZoom(app.zoom*1.2);
-  $('#zoomOut').onclick=()=>setZoom(app.zoom/1.2);
+  $('#zoomIn').onclick=()=>animateZoom(app.zoom*1.25);
+  $('#zoomOut').onclick=()=>animateZoom(app.zoom/1.25);
   $('#fitBtn').onclick=()=>{fitPage();renderAll();};
-  $('#zoomLabel').onclick=()=>{setZoom(1);toast('100%');};
+  $('#zoomLabel').onclick=()=>{animateZoom(1);toast('100%');};
 
   /* 筆設定彈窗內控制 */
   $('#widthRange').addEventListener('input',e=>{app.width=Number(e.target.value);$('#widthVal').textContent=app.width+' px';renderToolUI();persistSoon();});
@@ -2004,7 +2123,6 @@ function bindUI(){
   $('#snapToggle').onclick=()=>{app.shapeSnap=!app.shapeSnap;renderToolUI();persistSoon();};
   $('#eraserAutoBack').onclick=()=>{app.eraserAutoBack=app.eraserAutoBack===false?true:false;renderToolUI();persistSoon();};
   $('#tiltRange').addEventListener('input',e=>{app.tiltSens=Number(e.target.value);renderInputSettings();persistSoon();});
-  $('#smoothRange').addEventListener('input',e=>{app.smoothSens=Number(e.target.value);renderInputSettings();persistSoon();});
 
   /* 貼紙彈窗 */
   $('#stampSize').addEventListener('input',e=>{app.stampSize=Number(e.target.value);$('#stampSizeVal').textContent=app.stampSize;persistSoon();});
@@ -2079,8 +2197,8 @@ function bindUI(){
       case 'v':case 'V':setTool('hand');break;
       case 'r':case 'R':$('#rulerBtn').click();break;
       case 'b':case 'B':$('#bookmarkBtn').click();break;
-      case '+':case '=':setZoom(app.zoom*1.2);break;
-      case '-':case '_':setZoom(app.zoom/1.2);break;
+      case '+':case '=':animateZoom(app.zoom*1.25);break;
+      case '-':case '_':animateZoom(app.zoom/1.25);break;
       case '0':fitPage();renderAll();break;
       case 'PageUp':e.preventDefault();gotoPage(-1);break;
       case 'PageDown':e.preventDefault();gotoPage(1);break;
