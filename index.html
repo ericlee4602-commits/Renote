@@ -610,6 +610,12 @@ let undoStack=[], redoStack=[];
 let pointerMap=new Map(), pointerRoleMap=new Map(), gesture=null, action=null;
 let transformAnimTimer=null, lastGestureAt=0, touchBlockMouseUntil=0;
 let nativeTouchGesture=null, nativeTouchSingle=null, suppressPointerUntil=0;
+/* v8：Safari / iPad 會在 stylus pointerType=pen 後補送一筆 touchstart。
+   這會干擾自訂雙指縮放層，所以要用座標 + 時間把「筆的 ghost touch」濾掉。
+   同時記錄 TouchEvent radius：手指通常 radius 較大；eiP2/細筆尖 touch 常為 0 或很小。 */
+let recentPenNativeGuard={x:0,y:0,t:0};
+let recentNativeTouch={x:0,y:0,r:0,t:0,touches:0};
+let nativeFingerUntil=0;
 let touchCommitTimer=null, lastRawMoveAt=new Map(), lastMoveSig=new Map();
 let inputDebugRows=[], inputDebugEnabled=true, inputDebugRenderTimer=null, perfFrameCounter=0, perfLastTs=performance.now(), perfFPS=0;
 let compatStylusConfidence=0, lastCompatStylusAt=0, lastRealPenAt=0;
@@ -1797,6 +1803,7 @@ function stylusConfidenceBoost(){const dt=Date.now()-lastCompatStylusAt;return d
 function classifyPointerInput(e,phase='move'){
   const pt=e.pointerType||'';
   if(pt==='touch'&&Date.now()<suppressPointerUntil)return 'nativeTouch';
+  if(pt==='touch'&&nativeTouchLooksFinger(e))return 'finger';
   if(pt==='touch')touchBlockMouseUntil=Date.now()+900;
   if(pt==='mouse')return Date.now()<touchBlockMouseUntil?'blockedMouse':'mouse';
   if(hasRealPenSignal(e)){lastRealPenAt=Date.now();return 'pen';}
@@ -1821,7 +1828,7 @@ function cancelTinyLiveStrokeForGesture(now){
   const pts=action.obj.points||[];
   const first=pts[0]||{x:0,y:0}, last=pts[pts.length-1]||first;
   const moved=Math.hypot(last.x-first.x,last.y-first.y);
-  if(age<=190&&pts.length<=12&&moved<24){
+  if(age<=420&&pts.length<=42&&moved<96){
     removeObjectById(action.obj.id);
     action=null;lastStroke=null;penPointerId=null;
     renderObjects();renderOverlay();
@@ -1835,14 +1842,15 @@ function clearTouchPending(){
 }
 function schedulePendingTouchCommit(pointerId){
   if(touchCommitTimer)clearTimeout(touchCommitTimer);
-  const delay=stylusConfidenceBoost()>0?38:72;
+  /* v8：不再因「相容筆信心」而在靜止時自動落墨。
+     這是前版雙指縮放失效的主要原因：第一根手指還沒等第二指出現，就被 commit 成 stroke。 */
+  const delay=compatRecent()?96:155;
   touchCommitTimer=setTimeout(()=>{
     if(!(action&&action.kind==='touchPending'&&action.pointerId===pointerId))return;
-    if(activeTouchPointers().length>=2)return;
+    if(activeTouchPointers().length>=2||nativeTouchLooksFinger({clientX:action.last.x,clientY:action.last.y}))return;
     const pts=action.points||[];const moved=totalPendingMove();
     if(!isInkPenTool()||!app.smartTouchStylus)return;
-    /* 沒位移時不產生墨點；有穩定相容筆歷史時，短筆畫也能更快進入墨水。 */
-    if(moved>=0.6 || stylusConfidenceBoost()>0.4){
+    if(moved>=2.0){
       const last=pts[pts.length-1]||pts[0];const fake={pointerType:'touch',pointerId,clientX:action.last.x,clientY:action.last.y,pressure:.5,timeStamp:performance.now()};
       const seed=pts.slice();action=null;beginInkAction(fake,last,'touchStylus',seed);
     }
@@ -1953,7 +1961,7 @@ function pendingStraightness(){
 function decidePendingTouchIntent(e,pos){
   if(!(action&&action.kind==='touchPending'))return 'none';
   if(activeTouchPointers().length>=2)return 'pinch';
-  if(isPalmLike(e)||isFingerLikeTouch(e))return 'pan';
+  if(nativeTouchLooksFinger(e)||isPalmLike(e)||isFingerLikeTouch(e))return 'pan';
   const elapsed=Date.now()-(action.startedAt||Date.now());
   const moved=totalPendingMove();
   const v=pendingVelocity();
@@ -1963,12 +1971,12 @@ function decidePendingTouchIntent(e,pos){
   const geomOK=!hasContactGeometry(e)||(cs<=34);
   /* v6：相容筆快寫時，早期位移 + 速度就可進入 ink；一般手指拖移通常更直、更大面積，走 pan。 */
   if(geomOK&&isDrawingCapableTool()&&app.smartTouchStylus){
-    if(isInkPenTool()&&boosted>0.4&&elapsed>=18&&moved>=0.45)return 'ink';
-    if(elapsed>=24&&moved>=1.15&&v>=0.018&&straight<0.995)return 'ink';
-    if(elapsed>=58&&moved>=2.2&&v>=0.01)return 'ink';
-    if(elapsed>=115&&moved>=0.8&&isInkPenTool())return 'ink';
+    if(isInkPenTool()&&boosted>0.4&&elapsed>=20&&moved>=1.1&&v>=0.01)return 'ink';
+    if(elapsed>=26&&moved>=1.45&&v>=0.02&&straight<0.998)return 'ink';
+    if(elapsed>=64&&moved>=2.4&&v>=0.012)return 'ink';
+    if(elapsed>=140&&moved>=1.4&&isInkPenTool()&&!nativeTouchLooksFinger(e))return 'ink';
   }
-  if(moved>=13||elapsed>=130)return 'pan';
+  if(moved>=10||elapsed>=145)return 'pan';
   return 'wait';
 }
 function shouldProcessMoveEvent(e){
@@ -1988,6 +1996,31 @@ function collectMovePoints(e){
 
 function touchLike(t){return {clientX:t.clientX,clientY:t.clientY,pointerType:'touch',pointerId:'native_'+t.identifier};}
 function touchRadiusOf(t){return Math.max(Number(t.radiusX)||0,Number(t.radiusY)||0);}
+function compatRecent(ms=1600){return lastCompatStylusAt&&Date.now()-lastCompatStylusAt<ms;}
+function markRecentPenForNativeTouch(e){recentPenNativeGuard={x:e.clientX,y:e.clientY,t:Date.now()};}
+function isGhostTouchFromRecentPen(ev){
+  const now=Date.now();
+  if(!recentPenNativeGuard.t||now-recentPenNativeGuard.t>180)return false;
+  const touches=ev.changedTouches&&ev.changedTouches.length?ev.changedTouches:ev.touches;
+  if(!touches||touches.length!==1)return false;
+  const t=touches[0];
+  const d=Math.hypot(t.clientX-recentPenNativeGuard.x,t.clientY-recentPenNativeGuard.y);
+  return d<42;
+}
+function rememberNativeTouch(touches){
+  if(!touches||!touches.length)return;
+  const t=touches[0];
+  recentNativeTouch={x:t.clientX,y:t.clientY,r:touchRadiusOf(t),t:Date.now(),touches:touches.length};
+}
+function nativeTouchLooksFinger(e){
+  const now=Date.now();
+  if(now<nativeFingerUntil)return true;
+  if(recentNativeTouch.t&&now-recentNativeTouch.t<220){
+    const d=Math.hypot((e.clientX||0)-recentNativeTouch.x,(e.clientY||0)-recentNativeTouch.y);
+    if(d<60&&recentNativeTouch.r>=7)return true;
+  }
+  return false;
+}
 function clearTouchPointersFromMaps(){
   for(const [id,p] of [...pointerMap.entries()])if((p.pointerType||'')==='touch'){pointerMap.delete(id);pointerRoleMap.delete(id);lastRawMoveAt.delete(id);lastMoveSig.delete(id);}
 }
@@ -2019,24 +2052,37 @@ function updateNativePinch(ev){
   ev.preventDefault();return true;
 }
 function handleNativeTouchStart(ev){
+  if(isGhostTouchFromRecentPen(ev)){
+    const t=(ev.changedTouches&&ev.changedTouches[0])||(ev.touches&&ev.touches[0]);
+    debugEventRow({type:'touchstart',pointerType:'touchEvent',clientX:t?t.clientX:0,clientY:t?t.clientY:0,radiusX:t?t.radiusX:0,radiusY:t?t.radiusY:0,touches:{length:ev.touches.length}},'native','penGhost','ignored-pen-touch');
+    return;
+  }
+  rememberNativeTouch(ev.touches);
   if(ev.touches.length>=2){startNativePinchFromTouches(ev.touches,ev);return;}
   if(ev.touches.length===1){
-    const t=ev.touches[0];nativeTouchSingle={id:t.identifier,startX:t.clientX,startY:t.clientY,lastX:t.clientX,lastY:t.clientY,startedAt:Date.now(),panning:false,radius:touchRadiusOf(t)};
-    debugEventRow({type:'touchstart',pointerType:'touchEvent',clientX:t.clientX,clientY:t.clientY,radiusX:t.radiusX,radiusY:t.radiusY,touches:{length:1}},'native','touchSingle','single-start');
+    const t=ev.touches[0];const r=touchRadiusOf(t);
+    nativeTouchSingle={id:t.identifier,startX:t.clientX,startY:t.clientY,lastX:t.clientX,lastY:t.clientY,startedAt:Date.now(),panning:false,radius:r};
+    if(r>=7){nativeFingerUntil=Date.now()+650;clearTouchPending();if(action&&action.kind==='touchPending')action=null;}
+    debugEventRow({type:'touchstart',pointerType:'touchEvent',clientX:t.clientX,clientY:t.clientY,radiusX:t.radiusX,radiusY:t.radiusY,touches:{length:1}},'native',r>=7?'finger':'touchSingle',r>=7?'finger-start':'single-start');
   }
 }
 function handleNativeTouchMove(ev){
+  if(isGhostTouchFromRecentPen(ev))return;
+  rememberNativeTouch(ev.touches);
   if(ev.touches.length>=2){if(!nativeTouchGesture)startNativePinchFromTouches(ev.touches,ev);else updateNativePinch(ev);return;}
   if(nativeTouchGesture)return;
   if(ev.touches.length!==1||!nativeTouchSingle)return;
-  if(action&&action.kind==='draw')return;
+  if(action&&action.kind==='draw'&&action.inputRole==='pen')return;
   const t=ev.touches[0];
   const dx=t.clientX-nativeTouchSingle.startX,dy=t.clientY-nativeTouchSingle.startY;
   const moved=Math.hypot(dx,dy),age=Date.now()-nativeTouchSingle.startedAt;
   const radius=Math.max(nativeTouchSingle.radius,touchRadiusOf(t));
-  const likelyFinger=(radius>=8)||(moved>=26&&age>=65&&!lastCompatStylusAt)||(moved>=34&&age>=95);
+  const recentCompat=compatRecent(1200);
+  const likelyFinger=(radius>=7)||(moved>=8&&age>=25&&radius>=4)||(moved>=18&&age>=45&&!recentCompat)||(moved>=30&&age>=80);
   if(nativeTouchSingle.panning||likelyFinger){
-    clearTouchPending();action=null;nativeTouchSingle.panning=true;suppressPointerUntil=Date.now()+350;
+    nativeFingerUntil=Date.now()+650;
+    clearTouchPending();if(action&&action.kind==='touchPending')action=null;
+    nativeTouchSingle.panning=true;suppressPointerUntil=Date.now()+450;
     app.panX+=t.clientX-nativeTouchSingle.lastX;app.panY+=t.clientY-nativeTouchSingle.lastY;
     nativeTouchSingle.lastX=t.clientX;nativeTouchSingle.lastY=t.clientY;applyTransform();
     debugEventRow({type:'touchmove',pointerType:'touchEvent',clientX:t.clientX,clientY:t.clientY,radiusX:t.radiusX,radiusY:t.radiusY,touches:{length:1}},'native','finger','native-pan');
@@ -2057,6 +2103,7 @@ function handlePointerDown(e){
   const role=classifyPointerInput(e,'down');
   debugEventRow(e,'down',role,'classified');
   if(role==='blockedMouse'||role==='palm'||role==='nativeTouch')return;
+  if(role==='pen')markRecentPenForNativeTouch(e);
   pointerRoleMap.set(e.pointerId,role);
   pointerMap.set(e.pointerId,e);viewport.setPointerCapture?.(e.pointerId);
 
@@ -2181,7 +2228,7 @@ function pointerEnd(e,cancelled){
   debugEventRow(e,cancelled?'cancel':'end',role,cancelled?'cancel':'up');
   if(action&&action.kind==='touchPending'&&action.pointerId===e.pointerId){
     const small=!hasContactGeometry(e)||contactSizeOf(e)<=34;
-    if(!cancelled&&small&&totalPendingMove()>=0.4&&isInkPenTool()&&app.smartTouchStylus){
+    if(!cancelled&&small&&totalPendingMove()>=1.2&&isInkPenTool()&&app.smartTouchStylus&&!nativeTouchLooksFinger(e)){
       const pts=action.points.slice();
       action=null;
       beginInkAction(e,samplePoint(e),'touchStylus',pts);
