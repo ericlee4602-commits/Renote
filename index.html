@@ -535,7 +535,7 @@ button.tap-pop,.tool.tap-pop,.iconbtn.tap-pop,.pillbtn.tap-pop{animation:tapPop 
       <kbd>Ctrl+F</kbd><span>搜尋全部筆記</span>
       <kbd>Esc</kbd><span>關閉面板 / 回書櫃</span>
     </div>
-    <p class="small" style="margin:0">平板：預設只有觸控筆能書寫，手指只負責移動 / 縮放；按下上方「手指書寫」圖示後，單指也可書寫，雙指仍優先縮放。雙擊文字物件可重新編輯；套索選取後拖曳右下角控制點可縮放。</p>
+    <p class="small" style="margin:0">平板：預設只有系統回報為 pen 的觸控筆能書寫；所有 touch 都只負責移動 / 縮放，不會產生墨水。按下上方「手指書寫」圖示後，單指 touch 才可書寫，雙指仍優先縮放。雙擊文字物件可重新編輯；套索選取後拖曳右下角控制點可縮放。</p>
     <div class="row end"><button class="pillbtn primary" data-close-mask="helpMask">知道了</button></div>
   </div>
 </div>
@@ -563,7 +563,7 @@ let recordStream=null, recorder=null, recordChunks=[];
 let timer=null, timerLeft=25*60;
 let undoStack=[], redoStack=[];
 let pointerMap=new Map(), pointerRoleMap=new Map(), gesture=null, action=null;
-let transformAnimTimer=null, lastGestureAt=0;
+let transformAnimTimer=null, lastGestureAt=0, touchBlockMouseUntil=0;
 let penPointerId=null, lastPenAt=0;      // 手掌拒絕：追蹤觸控筆狀態
 let lastStroke=null;                      // 筆跡縫合：{obj,t,end} 副廠筆訊號中斷時接續上一筆
 let laserFade=null;
@@ -1150,9 +1150,29 @@ function renderObjects(){const p=activePage();ctx.clearRect(0,0,PAGE_W,PAGE_H);i
     }
     drawObject(ctx,obj,false);
   }}
-function renderLiveStroke(){ /* 書寫中只重繪進行中的這一筆（畫在 overlay），其餘不動 */
-  ov.clearRect(0,0,PAGE_W,PAGE_H);
-  if(action&&action.kind==='draw')drawObject(ov,action.obj,false);
+function renderLiveStroke(){ /* v4：書寫中不再每影格重算整條筆跡，只補畫新增段落，降低快寫延遲 */
+  if(action&&action.kind==='draw')drawLiveStrokeFast(ov,action.obj);
+}
+function drawLiveStrokeFast(c,obj){
+  const pts=obj.points||[]; if(!pts.length)return;
+  let start=Math.max(0,(obj._liveDrawn||0)-1);
+  c.save();
+  c.strokeStyle=obj.color;c.fillStyle=obj.color;c.lineCap='round';c.lineJoin='round';
+  let alpha=obj.opacity??1, w=obj.width||3;
+  if(obj.tool==='highlighter'){c.globalCompositeOperation='multiply';alpha=Math.min(alpha,.45);w*=2.2;}
+  else if(obj.tool==='marker'){w*=1.7;}
+  else if(obj.tool==='brush'){w*=1.35;}
+  else if(obj.tool==='pencil'){alpha*=.65;}
+  else if(obj.tool==='crayon'){alpha*=.58;w*=1.2;}
+  c.globalAlpha=alpha;c.lineWidth=Math.max(.8,w);
+  if(pts.length===1){c.beginPath();c.arc(pts[0].x,pts[0].y,Math.max(1,w/2),0,Math.PI*2);c.fill();c.restore();obj._liveDrawn=1;return;}
+  c.beginPath();c.moveTo(pts[start].x,pts[start].y);
+  for(let i=start+1;i<pts.length-1;i++){
+    const mx=(pts[i].x+pts[i+1].x)/2,my=(pts[i].y+pts[i+1].y)/2;
+    c.quadraticCurveTo(pts[i].x,pts[i].y,mx,my);
+  }
+  c.lineTo(pts[pts.length-1].x,pts[pts.length-1].y);c.stroke();
+  c.restore();obj._liveDrawn=Math.max(1,pts.length-1);
 }
 function renderOverlay(){
   ov.clearRect(0,0,PAGE_W,PAGE_H);
@@ -1548,14 +1568,14 @@ function updateInputModeUI(){
   app.inputMode='pen';
   const btn=$('#penModeBtn');
   btn.classList.toggle('active',!!app.touchDraw);
-  btn.title=app.touchDraw?'手指書寫已開啟：單指可書寫，雙指仍縮放 / 移動畫布':'手指書寫已關閉：手指只移動 / 縮放，不能產生墨水';
+  btn.title=app.touchDraw?'手指書寫已開啟：單指可書寫，雙指仍縮放 / 移動畫布':'手指書寫已關閉：touch 硬性禁止墨水，只能移動 / 縮放';
   updateInputBadge(app.lastPointerType||'ready');
 }
 function togglePenMode(){
   app.touchDraw=!app.touchDraw;
   app.inputMode='pen';
   updateInputModeUI();persistSoon();
-  toast(app.touchDraw?'手指書寫已開啟：單指可寫；雙指縮放優先':'手指書寫已關閉：手指只導航，不會畫出內容');
+  toast(app.touchDraw?'手指書寫已開啟：單指可寫；雙指縮放優先':'手指書寫已關閉：touch 已硬性禁止，不會畫出內容');
 }
 function isPenOnlyTouch(e){return !app.touchDraw&&e.pointerType==='touch';}
 
@@ -1626,8 +1646,8 @@ document.addEventListener('selectstart',e=>{if(!e.target.closest('input,textarea
 for(const ev of ['gesturestart','gesturechange','gestureend'])document.addEventListener(ev,e=>e.preventDefault());
 function distance(a,b){return Math.hypot(a.clientX-b.clientX,a.clientY-b.clientY);}
 
-/* ============ 觸控筆 / 手指 / 手掌判斷（Touch Gate v3）============
-   原則：不要再用「放寬 touch」硬猜筆。瀏覽器能明確回報 pen / tilt / altitude 時才視為觸控筆；
+/* ============ 觸控筆 / 手指 / 手掌判斷（Touch Gate v4）============
+   原則：不要再用「放寬 touch」硬猜筆。瀏覽器明確回報 pointerType='pen' 時才視為觸控筆；
    其餘 touch 預設都是手指，只能平移 / 縮放。只有使用者按下「手指書寫」開關後，單指 touch 才能產生墨水。
    這樣可避免雙指縮放時第一根手指被誤畫成筆跡。
 */
@@ -1638,9 +1658,9 @@ function isDrawingCapableTool(){
   return ['pen','gel','fountain','brush','pencil','marker','crayon','highlighter','eraser','laser','shape','lasso'].includes(app.tool);
 }
 function hasRealPenSignal(e){
-  return e.pointerType==='pen' ||
-    (typeof e.altitudeAngle==='number'&&e.altitudeAngle>0) ||
-    !!(Number(e.tiltX)||Number(e.tiltY));
+  /* v4 硬規則：touch 絕不靠 altitudeAngle / tilt 冒充成筆。
+     部分瀏覽器會在 touch 事件上也帶有 altitudeAngle 預設值，若採信會造成手指亂畫。 */
+  return (e.pointerType||'')==='pen';
 }
 function activePointers(){return [...pointerMap.values()].filter(p=>pointerRoleMap.get(p.pointerId)!=='palm');}
 function activeTouchPointers(){return activePointers().filter(p=>(p.pointerType||'')==='touch');}
@@ -1650,22 +1670,30 @@ function classifyPointerInput(e,phase='move'){
   const hasGeom=cs>1.5;
   const drawingTool=isDrawingCapableTool();
 
-  if(pt==='mouse')return 'mouse';
+  if(pt==='touch')touchBlockMouseUntil=Date.now()+900; // 阻擋 touch 後的相容 mouse 事件把手指畫成墨水
+  if(pt==='mouse')return Date.now()<touchBlockMouseUntil?'blockedMouse':'mouse';
   if(hasRealPenSignal(e))return 'pen';
+
+  /* 不明 pointerType 一律視為導航手指，不允許產生墨水。 */
   if(pt!=='touch')return 'finger';
 
-  /* 大面積接觸才當手掌；手掌不加入手勢、不產生墨水。 */
-  if(hasGeom&&cs>=50)return 'palm';
+  /* 大面積接觸直接當手掌；手掌不加入手勢、不產生墨水。 */
+  if(hasGeom&&cs>=42)return 'palm';
 
-  /* 核心修正：預設 touch 永遠不是筆。只有按下「手指書寫」才允許 touch 畫。 */
+  /* Touch Gate：手指書寫關閉時，任何 touch 都只能導航，不可畫線、橡皮、套索或圖形。 */
   if(!app.touchDraw)return 'finger';
 
   /* 手指書寫開啟時：只有第一根 touch 能當墨水；第二根一律保留給縮放 / 移動畫布。 */
   const existingTouchCount=activeTouchPointers().length;
   const alreadyThisPointer=pointerMap.has(e.pointerId);
-  if(phase==='move'&&alreadyThisPointer&&pointerRoleMap.get(e.pointerId)==='pen')return 'pen';
-  if(drawingTool&&existingTouchCount===0)return 'pen';
+  if(phase==='move'&&alreadyThisPointer&&pointerRoleMap.get(e.pointerId)==='touchInk')return 'touchInk';
+  if(drawingTool&&existingTouchCount===0)return 'touchInk';
   return 'finger';
+}
+function pointerMayCreateInk(role,e){
+  if(role==='blockedMouse'||role==='palm'||role==='finger')return false;
+  if((e.pointerType||'')==='touch')return !!app.touchDraw&&role==='touchInk';
+  return role==='pen'||role==='mouse';
 }
 function removeObjectById(id){const p=activePage();if(p&&id)p.objects=p.objects.filter(o=>o.id!==id);}
 function cancelTinyLiveStrokeForGesture(now){
@@ -1704,14 +1732,16 @@ viewport.addEventListener('pointerdown',e=>{
   const DRAW_KINDS=['draw','previewShape','rulerLine','laser','erase','lasso'];
   const drawTools=['pen','pencil','fountain','highlighter','eraser','laser','shape','lasso'];
   /* ── 以「接觸面積」判斷筆 / 手指 / 手掌（專業級手掌拒絕，不靠計時，永不漏筆） ── */
-  const pointerRole=classifyPointerInput(e);
+  const pointerRole=classifyPointerInput(e,'down');
+  if(pointerRole==='blockedMouse')return;
   pointerRoleMap.set(e.pointerId,pointerRole);
+  const inkLike=pointerMayCreateInk(pointerRole,e);
   const stylusLike=pointerRole==='pen';
-  const fingerLike=pointerRole==='finger';
+  const fingerLike=pointerRole==='finger'||pointerRole==='blockedMouse';
   const palmLike=pointerRole==='palm';
   if(palmLike){return;}
 
-  if(stylusLike){
+  if(inkLike){
     if(e.pointerType==='pen'&&!app._penAutoSwitched){
       app._penAutoSwitched=true;app.inputMode='pen';updateInputModeUI();persistSoon();
       toast('偵測到觸控筆 ✍️ 手指維持導航；需要手指寫字請按手指書寫');
@@ -1732,14 +1762,14 @@ viewport.addEventListener('pointerdown',e=>{
       /* 第二根手指極快進來且第一筆還只是小點 → 視為雙指縮放，不留下墨點。 */
       pointerMap.set(e.pointerId,e);viewport.setPointerCapture?.(e.pointerId);
       const arr=activePointers();
-      if(arr.length>=2&&cancelTinyLiveStrokeForGesture(now)&&startPinchGesture(arr))return;
+      if(arr.length>=2&&action&&action.inputRole==='touchInk'&&cancelTinyLiveStrokeForGesture(now)&&startPinchGesture(arr))return;
       pointerMap.delete(e.pointerId);pointerRoleMap.delete(e.pointerId);return;
     }
   }
   pointerMap.set(e.pointerId,e);viewport.setPointerCapture?.(e.pointerId);
   if(activePointers().length>=2){
     const arr=activePointers().slice(0,2);
-    if(action&&action.kind==='draw')cancelTinyLiveStrokeForGesture(now);
+    if(action&&action.kind==='draw'&&action.inputRole==='touchInk')cancelTinyLiveStrokeForGesture(now);
     if(!action||action.kind==='pan'){
       action=null;
       startPinchGesture(arr);
@@ -1749,10 +1779,11 @@ viewport.addEventListener('pointerdown',e=>{
   if(e.pointerType==='mouse'&&e.button!==0&&e.button!==1)return;
   const pos=samplePoint(e);
   /* ── 筆跡縫合：筆訊號中斷後極短時間內在附近落筆 → 接續上一筆 ── */
-  if(['pen','gel','fountain','brush','pencil','marker','crayon','highlighter'].includes(app.tool)&&!app.rulerOn&&lastStroke&&lastStroke.pg===app.activePageId&&now-lastStroke.t<lastStroke.win){
+  if(inkLike&&['pen','gel','fountain','brush','pencil','marker','crayon','highlighter'].includes(app.tool)&&!app.rulerOn&&lastStroke&&lastStroke.pg===app.activePageId&&now-lastStroke.t<lastStroke.win){
     const d=Math.hypot(pos.x-lastStroke.end.x,pos.y-lastStroke.end.y);
     if(d<16+30/app.zoom){
-      action={kind:'draw',obj:lastStroke.obj,stitched:true,startedAt:now};
+      action={kind:'draw',obj:lastStroke.obj,stitched:true,startedAt:now,inputRole:(lastStroke.inputRole||pointerRole)};
+      action.obj._liveDrawn=Math.max(0,(action.obj.points||[]).length-1);
       action.obj.points.push(pos);lastStroke=null;renderLiveStroke();return;
     }
   }
@@ -1765,6 +1796,8 @@ viewport.addEventListener('pointerdown',e=>{
   const fingerPan=fingerLike&&!app.touchDraw;
   const hand=app.tool==='hand'||keys.space||e.button===1||fingerPan;
   if(hand){action={kind:'pan',last:{x:e.clientX,y:e.clientY}};return;}
+  /* 墨水硬閘門：手指書寫關閉時，touch 到這裡也絕對不能建立任何物件。 */
+  if(!inkLike&&isDrawingCapableTool()){return;}
   if(app.tool==='text'){
     const hit=[...activePage().objects].reverse().find(o=>o.type==='text'&&pointInRect(pos,objectBounds(o)));
     startTextAt(hit?{x:hit.x,y:hit.y}:pos,hit||null);return;
@@ -1801,15 +1834,15 @@ viewport.addEventListener('pointerdown',e=>{
       width:app.tool==='highlighter'?app.width*3:app.width,opacity:app.tool==='highlighter'?.45:app.opacity,p1:pos,p2:pos}};
     renderOverlay();return;
   }
-  action={kind:'draw',startedAt:now,obj:currentStroke([pos])};activePage().objects.push(action.obj);renderObjects();renderLiveStroke();
+  action={kind:'draw',startedAt:now,inputRole:pointerRole,obj:currentStroke([pos])};action.obj._liveDrawn=0;activePage().objects.push(action.obj);renderObjects();ov.clearRect(0,0,PAGE_W,PAGE_H);renderLiveStroke();
 });
 viewport.addEventListener('pointermove',e=>{
   e.preventDefault();showEraserCursor(e);
   if(!pointerMap.has(e.pointerId)){
     /* 高傾角/抖動時系統可能用新 ID 續傳，沒有 pointerdown → 收編進進行中的筆畫 */
     const pointerRole=classifyPointerInput(e);
-    const stylusM=pointerRole==='pen';
-    if(stylusM&&action&&action.kind==='draw'){
+    const stylusM=pointerRole==='pen'||pointerRole==='touchInk';
+    if(stylusM&&pointerMayCreateInk(pointerRole,e)&&action&&action.kind==='draw'){
       pointerMap.set(e.pointerId,e);pointerRoleMap.set(e.pointerId,pointerRole);
       penPointerId=e.pointerId;lastPenAt=Date.now();
       viewport.setPointerCapture?.(e.pointerId);
@@ -1844,19 +1877,24 @@ viewport.addEventListener('pointermove',e=>{
   if(action.kind==='rulerLine'){action.obj.p2=constrainToRuler(action.start,pos);renderOverlay();return;}
   if(action.kind==='laser'){action.obj.points.push(pos);if(action.obj.points.length>70)action.obj.points.shift();renderOverlay();return;}
   if(action.kind==='draw'){
+    const role=pointerRoleMap.get(e.pointerId)||classifyPointerInput(e,'move');
+    if(!pointerMayCreateInk(role,e))return;
     const evs=e.getCoalescedEvents?e.getCoalescedEvents():[e];
     for(const ev of evs){const sp=samplePoint(ev);action.obj.points.push(sp);if(ev.pointerType==='pen'&&!_detect.decided)feedDetector(sp,ev);}
     requestLiveRender();
   }
 });
-/* rAF 渲染排程：輸入只負責收點（極快），畫面在下一影格才重繪 → 不掉幀、下筆即時 */
+/* rAF 渲染排程：輸入只負責收點（極快），畫面在下一影格只補畫新增段落 → 不掉幀、下筆即時 */
 let liveRAF=null;
 function requestLiveRender(){if(liveRAF)return;liveRAF=requestAnimationFrame(()=>{liveRAF=null;renderLiveStroke();});}
 function pointerEnd(e,cancelled){
   /* 補上抬筆瞬間的最後一點 → 筆畫不會收尾過短而留下間隙 */
   if(action&&action.kind==='draw'&&!cancelled&&(e.pointerType!=='mouse'||e.buttons===0)){
-    try{const last=action.obj.points[action.obj.points.length-1];const fp=samplePoint(e);
-      if(!last||Math.hypot(fp.x-last.x,fp.y-last.y)>.3){action.obj.points.push(fp);renderLiveStroke();}}catch(_){}
+    const role=pointerRoleMap.get(e.pointerId)||classifyPointerInput(e,'end');
+    if(pointerMayCreateInk(role,e)){
+      try{const last=action.obj.points[action.obj.points.length-1];const fp=samplePoint(e);
+        if(!last||Math.hypot(fp.x-last.x,fp.y-last.y)>.3){action.obj.points.push(fp);renderLiveStroke();}}catch(_){}
+    }
   }
   pointerMap.delete(e.pointerId);pointerRoleMap.delete(e.pointerId);if(activePointers().length<2){gesture=null;wrap.classList.remove('pinching');}
   if(e.pointerId===penPointerId){penPointerId=null;lastPenAt=Date.now();}
@@ -1866,7 +1904,7 @@ function pointerEnd(e,cancelled){
   if(a.kind==='draw'){
     const pts=a.obj.points;
     /* 訊號被切斷（cancel）→ 給 650ms 縫合窗；正常提筆 → 僅 120ms 防誤接（漢字筆畫不會被黏在一起） */
-    lastStroke={obj:a.obj,t:Date.now(),end:pts[pts.length-1]||{x:0,y:0},pg:app.activePageId,win:cancelled?650:120};
+    lastStroke={obj:a.obj,inputRole:a.inputRole,t:Date.now(),end:pts[pts.length-1]||{x:0,y:0},pg:app.activePageId,win:cancelled?650:120};
   }else lastStroke=null;
   if(a.kind==='lasso'){if(a.points.length>2)selectByLasso(a.points);renderOverlay();}
   if(a.kind==='previewShape'||a.kind==='rulerLine'){
@@ -1874,7 +1912,7 @@ function pointerEnd(e,cancelled){
     if(len>2){pushUndo();activePage().objects.push(o);activePage().updatedAt=Date.now();persistSoon();scheduleThumbs();}
     renderObjects();renderOverlay();
   }
-  if(a.kind==='draw'){if(!a.stitched)pushAdd(a.obj);drawObject(ctx,a.obj,false);renderOverlay();activePage().updatedAt=Date.now();persistSoon();scheduleThumbs();}
+  if(a.kind==='draw'){delete a.obj._liveDrawn;if(!a.stitched)pushAdd(a.obj);drawObject(ctx,a.obj,false);renderOverlay();activePage().updatedAt=Date.now();persistSoon();scheduleThumbs();}
   if(a.kind==='moveSelection'||a.kind==='scaleSelection'){activePage().updatedAt=Date.now();persistSoon();scheduleThumbs();renderOverlay();}
   if(a.kind==='erase'){
     renderOverlay();
@@ -2341,6 +2379,7 @@ function init(){
   load();
   if(app.tiltSens==null)app.tiltSens=.5;
   if(app.smoothSens==null)app.smoothSens=.45;
+  if(app._touchGateV4!==true){app.touchDraw=false;app._touchGateV4=true;}
   if(app.touchDraw==null)app.touchDraw=false;
   app.inputMode='pen';
   document.body.classList.toggle('dark',!!app.dark);
