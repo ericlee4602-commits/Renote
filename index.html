@@ -536,7 +536,7 @@ const clone = o => JSON.parse(JSON.stringify(o));
 const bgCanvas=$('#bgCanvas'), drawCanvas=$('#drawCanvas'), overlayCanvas=$('#overlayCanvas');
 const bg=bgCanvas.getContext('2d'), ctx=drawCanvas.getContext('2d'), ov=overlayCanvas.getContext('2d');
 const viewport=$('#viewport'), wrap=$('#canvasWrap');
-let dpr=Math.max(1,Math.min(window.devicePixelRatio||1,3));
+let dpr=Math.max(1,Math.min(window.devicePixelRatio||1,4));
 let imageCache=new Map(), clipboard=[], keys={space:false};
 let saveTimer=null, thumbTimer=null, memoryFallback=null;
 let recordStream=null, recorder=null, recordChunks=[];
@@ -636,10 +636,16 @@ function activePage(){const nb=activeNotebook(); return nb?(nb.pages.find(p=>p.i
 function pageIndex(){const nb=activeNotebook(); return nb?nb.pages.findIndex(p=>p.id===activePage().id):0;}
 
 /* ============ 儲存 ============ */
-function persistSoon(){clearTimeout(saveTimer); setSaved(false); saveTimer=setTimeout(saveNow,300);}
+function isInputBusy(){return (action&&['draw','erase','previewShape','rulerLine','laser','lasso','moveSelection','scaleSelection'].includes(action.kind))||penPointerId!==null||pointerMap.size>0;}
+function persistSoon(){clearTimeout(saveTimer); setSaved(false); saveTimer=setTimeout(saveNow,700);}
 function saveNow(){
-  try{localStorage.setItem(APP_KEY,JSON.stringify(app)); memoryFallback=null; setSaved(true);}
-  catch(e){memoryFallback=clone(app); setSaved(true,'僅存在記憶體'); }
+  /* 書寫中絕不存檔（同步 stringify 會卡住下一筆）→ 延後到放筆後 */
+  if(isInputBusy()){clearTimeout(saveTimer);saveTimer=setTimeout(saveNow,400);return;}
+  const run=()=>{
+    try{localStorage.setItem(APP_KEY,JSON.stringify(app)); memoryFallback=null; setSaved(true);}
+    catch(e){memoryFallback=clone(app); setSaved(true,'僅存在記憶體'); }
+  };
+  if(window.requestIdleCallback)requestIdleCallback(run,{timeout:1500});else run();
 }
 function setSaved(ok,txt){const b=$('#savedBadge'); if(!b)return; b.classList.toggle('saving',!ok); $('#savedText').textContent= ok?(txt||'已儲存'):'儲存中…';}
 function load(){
@@ -684,13 +690,13 @@ function askConfirm(title,text,okLabel='刪除'){
 /* ============ 畫布設定與座標 ============ */
 let RQ=1, rqTimer=null;
 function setupCanvas(){
-  dpr=Math.max(1,Math.min(window.devicePixelRatio||1,3));
+  dpr=Math.max(1,Math.min(window.devicePixelRatio||1,4));
   applyQuality(true);
 }
 /* 依縮放倍率動態提高畫布解析度 → 放大後不鋸齒 */
 function applyQuality(force){
-  const target=Math.max(1,Math.min((window.devicePixelRatio||1)*Math.max(1,app.zoom||1),3));
-  if(!force&&Math.abs(target-RQ)<.25)return;
+  const target=Math.max(2,Math.min((window.devicePixelRatio||1)*Math.max(1,app.zoom||1),4));
+  if(!force&&Math.abs(target-RQ)<.15)return;
   RQ=target;
   for(const c of [bgCanvas,drawCanvas,overlayCanvas]){c.width=Math.round(PAGE_W*RQ);c.height=Math.round(PAGE_H*RQ);c.style.width=PAGE_W+'px';c.style.height=PAGE_H+'px';}
   for(const c of [bg,ctx,ov]) c.setTransform(RQ,0,0,RQ,0,0);
@@ -1204,10 +1210,11 @@ function gotoPage(dir){const nb=activeNotebook();const i=pageIndex();const j=i+d
 /* ============ 側欄縮圖 ============ */
 const thumbCanvasCache=new Map();
 function renderThumbCanvas(cv,pg){
-  const tw=200,th=Math.round(tw*PAGE_H/PAGE_W);
-  cv.width=tw;cv.height=th;const c=cv.getContext('2d');
-  drawTemplateTo(c,pg.template,tw,th);
-  c.save();c.scale(tw/PAGE_W,tw/PAGE_W);
+  const tw=200,th=Math.round(tw*PAGE_H/PAGE_W),ss=2; /* 2x 超取樣 → 縮圖不糊 */
+  cv.width=tw*ss;cv.height=th*ss;cv.style.width=tw+'px';cv.style.height=th+'px';
+  const c=cv.getContext('2d');
+  drawTemplateTo(c,pg.template,tw*ss,th*ss);
+  c.save();c.scale(tw*ss/PAGE_W,tw*ss/PAGE_W);
   for(const obj of pg.objects)drawObject(c,obj,false);
   c.restore();
 }
@@ -1244,11 +1251,15 @@ function renderSidebar(){
   $('#bookmarkBtn').classList.toggle('active',!!(p&&p.bookmarked));
   renderTemplateChips();renderRecordings();
 }
-function scheduleThumbs(){clearTimeout(thumbTimer);thumbTimer=setTimeout(()=>{
+function scheduleThumbs(){clearTimeout(thumbTimer);thumbTimer=setTimeout(function go(){
+  if(isInputBusy()){thumbTimer=setTimeout(go,400);return;}   /* 書寫中不畫縮圖 */
   const nb=activeNotebook();if(!nb||app.view!=='editor')return;
   const cards=$$('#thumbList .thumb-card canvas');
-  nb.pages.forEach((pg,i)=>{if(cards[i])renderThumbCanvas(cards[i],pg);});
-},420);}
+  const idle=window.requestIdleCallback||(f=>setTimeout(f,0));
+  /* 只重畫目前頁的縮圖，其餘維持原樣（避免每筆都全部重畫） */
+  const ai=pageIndex();
+  if(cards[ai])idle(()=>renderThumbCanvas(cards[ai],nb.pages[ai]));
+},700);}
 
 /* ============ 工具 UI ============ */
 const TOOL_DEFAULTS={pen:{width:3,opacity:1},gel:{width:3,opacity:1},pencil:{width:2,opacity:.9},fountain:{width:4,opacity:1},brush:{width:6,opacity:1},marker:{width:7,opacity:.95},crayon:{width:8,opacity:.9},highlighter:{width:14,opacity:.4}};
@@ -1651,6 +1662,11 @@ viewport.addEventListener('pointermove',e=>{
   }
 });
 function pointerEnd(e,cancelled){
+  /* 補上抬筆瞬間的最後一點 → 筆畫不會收尾過短而留下間隙 */
+  if(action&&action.kind==='draw'&&!cancelled&&(e.pointerType!=='mouse'||e.buttons===0)){
+    try{const last=action.obj.points[action.obj.points.length-1];const fp=samplePoint(e);
+      if(!last||Math.hypot(fp.x-last.x,fp.y-last.y)>.3){action.obj.points.push(fp);renderLiveStroke();}}catch(_){}
+  }
   pointerMap.delete(e.pointerId);if(pointerMap.size<2)gesture=null;
   if(e.pointerId===penPointerId){penPointerId=null;lastPenAt=Date.now();}
   if(pointerMap.size)return;
@@ -1667,7 +1683,7 @@ function pointerEnd(e,cancelled){
     if(len>2){pushUndo();activePage().objects.push(o);activePage().updatedAt=Date.now();persistSoon();scheduleThumbs();}
     renderObjects();renderOverlay();
   }
-  if(a.kind==='draw'){renderObjects();renderOverlay();activePage().updatedAt=Date.now();persistSoon();scheduleThumbs();}
+  if(a.kind==='draw'){drawObject(ctx,a.obj,false);renderOverlay();activePage().updatedAt=Date.now();persistSoon();scheduleThumbs();}
   if(a.kind==='moveSelection'||a.kind==='scaleSelection'){activePage().updatedAt=Date.now();persistSoon();scheduleThumbs();renderOverlay();}
   if(a.kind==='erase'){
     renderOverlay();
@@ -1741,7 +1757,7 @@ function download(blob,name){const a=document.createElement('a');a.href=URL.crea
   document.body.appendChild(a);a.click();setTimeout(()=>{URL.revokeObjectURL(a.href);a.remove();},600);}
 async function exportPNG(){
   await preloadImagesOf([activePage()]);
-  pageToCanvas(activePage(),2).toBlob(b=>{download(b,safeName(activePage().title)+'.png');toast('PNG 已匯出');});
+  pageToCanvas(activePage(),3).toBlob(b=>{download(b,safeName(activePage().title)+'.png');toast('PNG 已匯出');});
 }
 let jspdfLoading=null;
 function loadJsPDF(){
@@ -1762,7 +1778,7 @@ async function exportPDF(){
   const doc=new jsPDF({unit:'pt',format:[PAGE_W*.75,PAGE_H*.75]});
   nb.pages.forEach((pg,i)=>{
     if(i)doc.addPage([PAGE_W*.75,PAGE_H*.75]);
-    const data=pageToCanvas(pg,1.6).toDataURL('image/jpeg',.88);
+    const data=pageToCanvas(pg,2.2).toDataURL('image/jpeg',.92);
     doc.addImage(data,'JPEG',0,0,PAGE_W*.75,PAGE_H*.75);
   });
   doc.save(safeName(nb.name)+'.pdf');toast('PDF 已匯出：'+nb.pages.length+' 頁');
