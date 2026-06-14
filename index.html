@@ -590,7 +590,7 @@ body.dark .debug-table-wrap{background:rgba(40,34,29,.45)}
 <script>
 (() => {
 'use strict';
-const APP_KEY = 'renote_atelier_v4';
+const APP_KEY = 'renote_atelier_v5';
 const PAGE_W = 900, PAGE_H = 1273;
 const uid = (p='id') => p + '_' + Date.now().toString(36) + '_' + Math.random().toString(36).slice(2,8);
 const $ = s => document.querySelector(s);
@@ -619,6 +619,7 @@ let nativeFingerUntil=0;
 let touchCommitTimer=null, lastRawMoveAt=new Map(), lastMoveSig=new Map();
 let deferredInkRefineTimer=null;
 let inputDebugRows=[], inputDebugEnabled=true, inputDebugRenderTimer=null, perfFrameCounter=0, perfLastTs=performance.now(), perfFPS=0;
+let debugLastMoveLogAt=0, debugMoveSkip=0, debugPanelVisible=false;
 let compatStylusConfidence=0, lastCompatStylusAt=0, lastRealPenAt=0;
 let pageRenderStats={lastObjectCount:0,lastPointCount:0,lastRenderMs:0};
 let penPointerId=null, lastPenAt=0;      // 手掌拒絕：追蹤觸控筆狀態
@@ -1258,10 +1259,12 @@ function commitStrokeFastToMain(obj){
 function scheduleDeferredInkRefine(){
   clearTimeout(deferredInkRefineTimer);
   deferredInkRefineTimer=setTimeout(function refineLater(){
-    if(isInputBusy()){deferredInkRefineTimer=setTimeout(refineLater,220);return;}
-    /* 快寫時先用 fast commit 保證即時顯示；停筆後再重繪成高品質平滑筆跡。 */
-    renderObjects();renderOverlay();
-  },260);
+    if(isInputBusy()){deferredInkRefineTimer=setTimeout(refineLater,360);return;}
+    /* v10：高品質重繪改成「更晚 + idle」。
+       快速連寫時不搶主執行緒，避免上一筆 refine 卡住下一筆 pointerdown。 */
+    const run=()=>{if(!isInputBusy()){renderObjects();renderOverlay();}};
+    if(window.requestIdleCallback)requestIdleCallback(run,{timeout:1400});else setTimeout(run,0);
+  },760);
 }
 function renderOverlay(){
   ov.clearRect(0,0,PAGE_W,PAGE_H);
@@ -1737,6 +1740,13 @@ function fmtNum(v,d=1){return (v==null||Number.isNaN(Number(v)))?'—':Number(v)
 function debugEventRow(e,phase,role,decision){
   if(!app.debugInput||!inputDebugEnabled)return;
   const t=performance.now();
+  /* v10：debug 本身不能拖慢手寫。高速書寫時 pointermove 很密集，
+     只完整記錄 down/up/cancel/pinch/pending；draw move 以約 30ms 節流。 */
+  if(phase==='move'&&decision==='draw'){
+    debugMoveSkip++;
+    if(t-debugLastMoveLogAt<30 && debugMoveSkip%6!==0)return;
+    debugLastMoveLogAt=t;
+  }
   const touches=e&&e.touches?e.touches.length:activeTouchPointers().length;
   const row={
     ms:Math.round(t),
@@ -1759,6 +1769,7 @@ function currentPageLoadStats(){
 }
 function renderDebugPanel(){
   const panel=$('#debugPanel');if(!panel)return;
+  debugPanelVisible=panel.classList.contains('show');
   const rows=$('#debugRows');if(rows&&panel.classList.contains('show')){
     const recent=inputDebugRows.slice(-120).reverse();
     rows.innerHTML=recent.map(r=>`<tr data-role="${r.role}" data-decision="${r.decision}"><td>${r.ms}</td><td>${r.event}</td><td>${r.pt}</td><td>${r.role}</td><td>${r.decision}</td><td>${r.x},${r.y}</td><td>${r.w||r.radius}${r.radius?'r':''}${r.h?'/'+r.h:''}</td><td>${r.p}</td><td>${r.touches}</td><td>${r.action}</td></tr>`).join('');
@@ -1811,6 +1822,21 @@ function isInkPenTool(){return ['pen','gel','fountain','brush','pencil','marker'
 function hasRealPenSignal(e){return (e.pointerType||'')==='pen';}
 function activePointers(){return [...pointerMap.values()].filter(p=>pointerRoleMap.get(p.pointerId)!=='palm');}
 function activeTouchPointers(){return activePointers().filter(p=>(p.pointerType||'')==='touch');}
+function isEditorPointerTarget(e){
+  if(!e||!e.target)return false;
+  return e.target===viewport||viewport.contains(e.target)||e.target===wrap||wrap.contains(e.target);
+}
+function isActivePointerSession(e){
+  return !!(e&&(pointerMap.has(e.pointerId)||e.pointerId===penPointerId||action));
+}
+function shouldRoutePointerEvent(e,kind){
+  if(app.view!=='editor')return false;
+  const inside=isEditorPointerTarget(e);
+  if(kind==='down')return inside;
+  if(kind==='move')return inside||isActivePointerSession(e);
+  if(kind==='end'||kind==='cancel')return inside||isActivePointerSession(e);
+  return inside;
+}
 function isPalmLike(e){const cs=contactSizeOf(e);return hasContactGeometry(e)&&cs>=64;}
 function isFingerLikeTouch(e){const cs=contactSizeOf(e);return hasContactGeometry(e)&&cs>=34;}
 function isSmallStylusLikeTouch(e){const cs=contactSizeOf(e);return hasContactGeometry(e)&&cs>1.5&&cs<=28;}
@@ -2024,9 +2050,10 @@ function decidePendingTouchIntent(e,pos){
 function shouldProcessMoveEvent(e){
   const sig=[e.type,Math.round((e.timeStamp||0)*10),Math.round(e.clientX*10),Math.round(e.clientY*10)].join(':');
   const last=lastMoveSig.get(e.pointerId);if(last===sig)return false;lastMoveSig.set(e.pointerId,sig);
-  if(e.type==='pointerrawupdate'){lastRawMoveAt.set(e.pointerId,performance.now());return true;}
-  const rawAt=lastRawMoveAt.get(e.pointerId)||0;
-  if(rawAt&&performance.now()-rawAt<6)return false;
+  /* v10：不再因 pointerrawupdate 剛進來就丟掉 pointermove。
+     某些 iPad/Safari 組合 rawupdate 與 move 的 coalesced 資料不同；
+     強行抑制 pointermove 可能讓快寫軌跡或起筆段消失。 */
+  if(e.type==='pointerrawupdate'){lastRawMoveAt.set(e.pointerId,performance.now());}
   return true;
 }
 function collectMovePoints(e){
@@ -2147,7 +2174,7 @@ function handlePointerDown(e){
   if(role==='blockedMouse'||role==='palm'||role==='nativeTouch')return;
   if(role==='pen')markRecentPenForNativeTouch(e);
   pointerRoleMap.set(e.pointerId,role);
-  pointerMap.set(e.pointerId,e);viewport.setPointerCapture?.(e.pointerId);
+  pointerMap.set(e.pointerId,e);try{viewport.setPointerCapture?.(e.pointerId);}catch(_){}
 
   /* 第二根 touch 一進來，永遠優先縮放 / 拖移，取消尚未確認的墨水。 */
   if(activeTouchPointers().length>=2){
@@ -2324,15 +2351,24 @@ function pointerEnd(e,cancelled){
       ov.clearRect(0,0,PAGE_W,PAGE_H);ov.save();ov.globalAlpha=alpha;drawStrokeObject(ov,a.obj,true);ov.restore();},40);
   }
 }
-viewport.addEventListener('pointerdown',handlePointerDown);
-viewport.addEventListener('pointermove',handlePointerMove);
-if('onpointerrawupdate' in window){viewport.addEventListener('pointerrawupdate',handlePointerMove);}
-viewport.addEventListener('pointerup',e=>pointerEnd(e,false));
+/* v10：PointerEvent 監聽提升到 document capture。
+   iPad / Safari 快寫時，事件 target 可能瞬間離開 canvas 或被 ghost touch 影響；
+   document capture 可先於 bubbling 收到 down/move/up，避免漏筆。 */
+const pointerRouteOpts={capture:true,passive:false};
+function routePointerDown(e){if(shouldRoutePointerEvent(e,'down'))handlePointerDown(e);}
+function routePointerMove(e){if(shouldRoutePointerEvent(e,'move'))handlePointerMove(e);}
+function routePointerUp(e){if(shouldRoutePointerEvent(e,'end'))pointerEnd(e,false);}
+function routePointerCancel(e){if(shouldRoutePointerEvent(e,'cancel'))pointerEnd(e,true);}
+document.addEventListener('pointerdown',routePointerDown,pointerRouteOpts);
+document.addEventListener('pointermove',routePointerMove,pointerRouteOpts);
+if('onpointerrawupdate' in window){document.addEventListener('pointerrawupdate',routePointerMove,pointerRouteOpts);}
+document.addEventListener('pointerup',routePointerUp,pointerRouteOpts);
+document.addEventListener('pointercancel',routePointerCancel,pointerRouteOpts);
+
 viewport.addEventListener('touchstart',handleNativeTouchStart,{passive:false,capture:true});
 viewport.addEventListener('touchmove',handleNativeTouchMove,{passive:false,capture:true});
 viewport.addEventListener('touchend',handleNativeTouchEnd,{passive:false,capture:true});
 viewport.addEventListener('touchcancel',handleNativeTouchEnd,{passive:false,capture:true});
-viewport.addEventListener('pointercancel',e=>pointerEnd(e,true));
 viewport.addEventListener('pointerleave',e=>{$('#eraserCursor').style.display='none';if(e.pointerType==='mouse')pointerEnd(e,false);});
 viewport.addEventListener('wheel',e=>{
   e.preventDefault();const rect=viewport.getBoundingClientRect();
