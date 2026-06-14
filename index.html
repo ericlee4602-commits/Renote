@@ -353,7 +353,7 @@ button.tap-pop,.tool.tap-pop,.iconbtn.tap-pop,.pillbtn.tap-pop{animation:tapPop 
     <span id="timerBadge">25:00</span>
     <span id="savedBadge"><span class="dotled"></span><span id="savedText">已儲存</span></span>
     <span class="input-badge" id="inputBadge">Auto · Ready</span>
-    <button class="iconbtn" id="penModeBtn" title="筆模式：只有觸控筆能書寫，手指負責移動縮放"></button>
+    <button class="iconbtn" id="penModeBtn" title="手指書寫開關：關閉時手指只移動 / 縮放；開啟時手指也可書寫"></button>
     <button class="iconbtn" id="bookmarkBtn" title="書籤此頁"></button>
     <button class="iconbtn" id="findBtn" title="搜尋全部筆記 (Ctrl+F)"></button>
     <button class="iconbtn" id="audioBtn" title="錄音"></button>
@@ -535,7 +535,7 @@ button.tap-pop,.tool.tap-pop,.iconbtn.tap-pop,.pillbtn.tap-pop{animation:tapPop 
       <kbd>Ctrl+F</kbd><span>搜尋全部筆記</span>
       <kbd>Esc</kbd><span>關閉面板 / 回書櫃</span>
     </div>
-    <p class="small" style="margin:0">平板：開啟「筆模式」後只有觸控筆能書寫，手掌與手指可安心放在螢幕上移動或縮放。雙擊文字物件可重新編輯；套索選取後拖曳右下角控制點可縮放。</p>
+    <p class="small" style="margin:0">平板：預設只有觸控筆能書寫，手指只負責移動 / 縮放；按下上方「手指書寫」圖示後，單指也可書寫，雙指仍優先縮放。雙擊文字物件可重新編輯；套索選取後拖曳右下角控制點可縮放。</p>
     <div class="row end"><button class="pillbtn primary" data-close-mask="helpMask">知道了</button></div>
   </div>
 </div>
@@ -611,6 +611,7 @@ const ICONS={
   hand:'<svg viewBox="0 0 24 24"><path d="M8 13V6.2a1.4 1.4 0 0 1 2.8 0V11"/><path d="M10.8 11V4.4a1.4 1.4 0 0 1 2.8 0V11"/><path d="M13.6 11V5.6a1.4 1.4 0 0 1 2.8 0V12"/><path d="M16.4 12V8a1.4 1.4 0 0 1 2.8 0v6.5c0 4-2.6 7-6.7 7-2.7 0-4.3-1-5.6-2.7l-3.3-4.5a1.5 1.5 0 0 1 2.3-1.9L8 14.5V13"/></svg>',
   pen:'<svg viewBox="0 0 24 24"><path d="M17 3.3a2.4 2.4 0 0 1 3.4 0l.3.3a2.4 2.4 0 0 1 0 3.4L8.5 19.2 3 21l1.8-5.5L17 3.3z"/><path d="m14.8 5.5 3.7 3.7"/><path d="m4.8 15.5 3.7 3.7"/></svg>',
   penmode:'<svg viewBox="0 0 24 24"><path d="M16.5 3.5a2.1 2.1 0 0 1 3 0l1 1a2.1 2.1 0 0 1 0 3L10 18l-4.5 1.5L7 15 16.5 3.5z"/><path d="m14.5 5.5 4 4"/><circle cx="5.5" cy="19" r="2.6"/><path d="m3.7 17.2 3.6 3.6"/></svg>',
+  finger:'<svg viewBox="0 0 24 24"><path d="M8.4 13.2V6.4a1.45 1.45 0 0 1 2.9 0v5.2"/><path d="M11.3 11.6V4.8a1.45 1.45 0 0 1 2.9 0v6.8"/><path d="M14.2 11.8V6.2a1.45 1.45 0 0 1 2.9 0v7"/><path d="M17.1 13.2V9.1a1.45 1.45 0 0 1 2.9 0v5.7c0 4.1-2.7 6.7-6.5 6.7-2.6 0-4.3-1-5.7-3l-2.9-4a1.45 1.45 0 0 1 2.25-1.82l1.25 1.52z"/><path d="M4 4.5c1.3-1.3 3.3-1.3 4.6 0"/><path d="M2.4 2.4c2.2-2.2 5.7-2.2 7.9 0"/></svg>',
   pencil:'<svg viewBox="0 0 24 24"><path d="M3 21l1.6-5L16 4.6a2 2 0 0 1 2.8 0l.6.6a2 2 0 0 1 0 2.8L8 19.4 3 21z"/><path d="m4.6 16 3.4 3.4"/><path d="M3 21l2.4-.8L4 18.6 3 21z" fill="currentColor" stroke="none"/></svg>',
   calligraphy:'<svg viewBox="0 0 24 24"><path d="M12 2.5c2.9 2.7 4.4 5.6 4.4 8.5 0 1.1-.3 2.2-.9 3.3L12 21.5l-3.5-7.2c-.6-1.1-.9-2.2-.9-3.3 0-2.9 1.5-5.8 4.4-8.5z"/><circle cx="12" cy="11.5" r="1.4"/><path d="M12 13v5"/></svg>',
   highlighter:'<svg viewBox="0 0 24 24"><path d="m9.5 10.5-5.7 5.7a1 1 0 0 0 0 1.4l2.6 2.6a1 1 0 0 0 1.4 0l5.7-5.7"/><path d="M9.5 10.5 16 4a2 2 0 0 1 2.8 0l1.2 1.2a2 2 0 0 1 0 2.8l-6.5 6.5-4-4z"/><path d="M3 21h9" stroke-width="3"/></svg>',
@@ -1533,20 +1534,30 @@ document.addEventListener('pointerdown',e=>{
   $$('.popover').forEach(p=>p.classList.remove('show'));
 },true);
 
-/* ============ 筆模式 ============ */
+/* ============ 手指書寫閘門 / 筆模式 ============ */
 function updateInputBadge(type){
   if(type)app.lastPointerType=type;
   const el=$('#inputBadge');if(!el)return;
-  const mode=(app.inputMode||'auto')==='pen'?'Pencil':'Auto';
+  const mode=app.touchDraw?'Finger Ink':'Pen Ink';
   const pt=app.lastPointerType==='pen'?'Pen':app.lastPointerType==='touch'?'Touch':app.lastPointerType==='mouse'?'Mouse':'Ready';
-  el.textContent=mode+' · '+pt;el.className='input-badge '+(app.lastPointerType||'');
+  el.textContent=mode+' · '+pt;
+  el.className='input-badge '+(app.touchDraw?'touch':'pen');
 }
-function updateInputModeUI(){$('#penModeBtn').classList.toggle('active',(app.inputMode||'auto')==='pen');updateInputBadge(app.lastPointerType||'ready');}
+function updateInputModeUI(){
+  /* 固定採用 CollaNote 類邏輯：筆可寫，手指預設只導航；只有 touchDraw=true 才允許手指書寫。 */
+  app.inputMode='pen';
+  const btn=$('#penModeBtn');
+  btn.classList.toggle('active',!!app.touchDraw);
+  btn.title=app.touchDraw?'手指書寫已開啟：單指可書寫，雙指仍縮放 / 移動畫布':'手指書寫已關閉：手指只移動 / 縮放，不能產生墨水';
+  updateInputBadge(app.lastPointerType||'ready');
+}
 function togglePenMode(){
-  app.inputMode=(app.inputMode||'auto')==='pen'?'auto':'pen';updateInputModeUI();persistSoon();
-  toast(app.inputMode==='pen'?'筆模式：觸控筆書寫，手指移動 / 縮放畫布':'Auto 模式：筆與手指都可書寫');
+  app.touchDraw=!app.touchDraw;
+  app.inputMode='pen';
+  updateInputModeUI();persistSoon();
+  toast(app.touchDraw?'手指書寫已開啟：單指可寫；雙指縮放優先':'手指書寫已關閉：手指只導航，不會畫出內容');
 }
-function isPenOnlyTouch(e){return (app.inputMode||'auto')==='pen'&&e.pointerType==='touch';}
+function isPenOnlyTouch(e){return !app.touchDraw&&e.pointerType==='touch';}
 
 /* ============ 文字 / 貼紙 ============ */
 function startTextAt(pos,editObj){
@@ -1615,12 +1626,10 @@ document.addEventListener('selectstart',e=>{if(!e.target.closest('input,textarea
 for(const ev of ['gesturestart','gesturechange','gestureend'])document.addEventListener(ev,e=>e.preventDefault());
 function distance(a,b){return Math.hypot(a.clientX-b.clientX,a.clientY-b.clientY);}
 
-/* ============ 觸控筆 / 手指 / 手掌判斷（修正版）============
-   原本完全依賴 e.width/e.height 接觸面積；某些瀏覽器、金屬筆頭、類紙膜、
-   或副廠筆會把筆回報成 pointerType='touch' 且 width/height 忽大忽小或等於 1。
-   結果：筆被誤判成手指平移，所以畫好幾次才有一次真正進入 draw。
-   修正：筆模式下，單點、小面積或未知面積的 touch 優先視為「筆觸備援」；
-        只有明顯大面積才視為手掌，雙指仍保留縮放/移動畫布。
+/* ============ 觸控筆 / 手指 / 手掌判斷（Touch Gate v3）============
+   原則：不要再用「放寬 touch」硬猜筆。瀏覽器能明確回報 pen / tilt / altitude 時才視為觸控筆；
+   其餘 touch 預設都是手指，只能平移 / 縮放。只有使用者按下「手指書寫」開關後，單指 touch 才能產生墨水。
+   這樣可避免雙指縮放時第一根手指被誤畫成筆跡。
 */
 function contactSizeOf(e){
   return Math.max(Number(e.width)||0,Number(e.height)||0);
@@ -1633,34 +1642,31 @@ function hasRealPenSignal(e){
     (typeof e.altitudeAngle==='number'&&e.altitudeAngle>0) ||
     !!(Number(e.tiltX)||Number(e.tiltY));
 }
+function activePointers(){return [...pointerMap.values()].filter(p=>pointerRoleMap.get(p.pointerId)!=='palm');}
+function activeTouchPointers(){return activePointers().filter(p=>(p.pointerType||'')==='touch');}
 function classifyPointerInput(e,phase='move'){
   const pt=e.pointerType||'';
   const cs=contactSizeOf(e);
   const hasGeom=cs>1.5;
-  const penMode=(app.inputMode||'auto')==='pen';
   const drawingTool=isDrawingCapableTool();
 
   if(pt==='mouse')return 'mouse';
   if(hasRealPenSignal(e))return 'pen';
   if(pt!=='touch')return 'finger';
 
-  /* 只有非常明顯的大接觸面才視為手掌；斜握筆、類紙膜、金屬筆頭會放寬。 */
-  if(hasGeom&&cs>=72)return 'palm';
+  /* 大面積接觸才當手掌；手掌不加入手勢、不產生墨水。 */
+  if(hasGeom&&cs>=50)return 'palm';
 
-  const smallOrUnknown=!hasGeom||cs<=48;
-  const firstPointer=pointerMap.size===0;
-  const drawingNow=!!(action&&action.kind==='draw');
+  /* 核心修正：預設 touch 永遠不是筆。只有按下「手指書寫」才允許 touch 畫。 */
+  if(!app.touchDraw)return 'finger';
 
-  /* 下筆優先：筆模式 + 書寫工具 + 單點 touch，一律先當作筆。
-     第二根手指按下時先保留給雙指縮放；若只是筆訊號中途換 pointerId，move 階段仍會接回。 */
-  if(penMode&&drawingTool&&smallOrUnknown){
-    if(firstPointer)return 'pen';
-    if(phase==='move'&&drawingNow&&Date.now()-lastPenAt<900)return 'pen';
-  }
-
+  /* 手指書寫開啟時：只有第一根 touch 能當墨水；第二根一律保留給縮放 / 移動畫布。 */
+  const existingTouchCount=activeTouchPointers().length;
+  const alreadyThisPointer=pointerMap.has(e.pointerId);
+  if(phase==='move'&&alreadyThisPointer&&pointerRoleMap.get(e.pointerId)==='pen')return 'pen';
+  if(drawingTool&&existingTouchCount===0)return 'pen';
   return 'finger';
 }
-function activePointers(){return [...pointerMap.values()].filter(p=>pointerRoleMap.get(p.pointerId)!=='palm');}
 function removeObjectById(id){const p=activePage();if(p&&id)p.objects=p.objects.filter(o=>o.id!==id);}
 function cancelTinyLiveStrokeForGesture(now){
   if(!(action&&action.kind==='draw'))return false;
@@ -1698,7 +1704,7 @@ viewport.addEventListener('pointerdown',e=>{
   const DRAW_KINDS=['draw','previewShape','rulerLine','laser','erase','lasso'];
   const drawTools=['pen','pencil','fountain','highlighter','eraser','laser','shape','lasso'];
   /* ── 以「接觸面積」判斷筆 / 手指 / 手掌（專業級手掌拒絕，不靠計時，永不漏筆） ── */
-  const pointerRole=classifyPointerInput(e,'down');
+  const pointerRole=classifyPointerInput(e);
   pointerRoleMap.set(e.pointerId,pointerRole);
   const stylusLike=pointerRole==='pen';
   const fingerLike=pointerRole==='finger';
@@ -1706,10 +1712,9 @@ viewport.addEventListener('pointerdown',e=>{
   if(palmLike){return;}
 
   if(stylusLike){
-    app._forceInkUntil=Date.now()+900;
-    if((app.inputMode||'auto')==='auto'&&!app._penAutoSwitched){
+    if(e.pointerType==='pen'&&!app._penAutoSwitched){
       app._penAutoSwitched=true;app.inputMode='pen';updateInputModeUI();persistSoon();
-      toast('偵測到觸控筆 ✍️ 已自動開啟筆模式：雙指移動 / 縮放');
+      toast('偵測到觸控筆 ✍️ 手指維持導航；需要手指寫字請按手指書寫');
     }
     /* 訊號抖動：筆還在畫卻送來新 pointerId → 直接接手原本那一筆，不中斷 */
     if(action&&action.kind==='draw'&&penPointerId!==null&&e.pointerId!==penPointerId){
@@ -1732,9 +1737,10 @@ viewport.addEventListener('pointerdown',e=>{
     }
   }
   pointerMap.set(e.pointerId,e);viewport.setPointerCapture?.(e.pointerId);
-  if(activePointers().length===2){
-    const arr=activePointers();
-    if(cancelTinyLiveStrokeForGesture(now)||!action){
+  if(activePointers().length>=2){
+    const arr=activePointers().slice(0,2);
+    if(action&&action.kind==='draw')cancelTinyLiveStrokeForGesture(now);
+    if(!action||action.kind==='pan'){
       action=null;
       startPinchGesture(arr);
       return;
@@ -1756,7 +1762,7 @@ viewport.addEventListener('pointerdown',e=>{
     if(hit){const a=app._seekRec.audio;try{a.currentTime=Math.max(0,hit.at/1000);a.play();}catch(_){}
       pointerMap.delete(e.pointerId);toast('▶ 跳到 '+fmtTime(hit.at/1000));return;}
   }
-  const fingerPan=fingerLike&&(app.inputMode||'auto')==='pen';
+  const fingerPan=fingerLike&&!app.touchDraw;
   const hand=app.tool==='hand'||keys.space||e.button===1||fingerPan;
   if(hand){action={kind:'pan',last:{x:e.clientX,y:e.clientY}};return;}
   if(app.tool==='text'){
@@ -1801,7 +1807,7 @@ viewport.addEventListener('pointermove',e=>{
   e.preventDefault();showEraserCursor(e);
   if(!pointerMap.has(e.pointerId)){
     /* 高傾角/抖動時系統可能用新 ID 續傳，沒有 pointerdown → 收編進進行中的筆畫 */
-    const pointerRole=classifyPointerInput(e,'move');
+    const pointerRole=classifyPointerInput(e);
     const stylusM=pointerRole==='pen';
     if(stylusM&&action&&action.kind==='draw'){
       pointerMap.set(e.pointerId,e);pointerRoleMap.set(e.pointerId,pointerRole);
@@ -1810,6 +1816,9 @@ viewport.addEventListener('pointermove',e=>{
     }else{updateInputBadge(e.pointerType||app.lastPointerType);return;}
   }
   pointerMap.set(e.pointerId,e);
+  if(activePointers().length>=2&&!gesture&&(!action||action.kind==='pan')){
+    action=null;startPinchGesture(activePointers().slice(0,2));
+  }
   if(activePointers().length>=2&&gesture){
     const arr=activePointers().slice(0,2);const dist=Math.max(1,distance(arr[0],arr[1]));
     const cx=(arr[0].clientX+arr[1].clientX)/2,cy=(arr[0].clientY+arr[1].clientY)/2;
@@ -1855,7 +1864,6 @@ function pointerEnd(e,cancelled){
   if(!action)return;
   const a=action;action=null;
   if(a.kind==='draw'){
-    app._forceInkUntil=Date.now()+1200;
     const pts=a.obj.points;
     /* 訊號被切斷（cancel）→ 給 650ms 縫合窗；正常提筆 → 僅 120ms 防誤接（漢字筆畫不會被黏在一起） */
     lastStroke={obj:a.obj,t:Date.now(),end:pts[pts.length-1]||{x:0,y:0},pg:app.activePageId,win:cancelled?650:120};
@@ -1886,13 +1894,6 @@ function pointerEnd(e,cancelled){
 viewport.addEventListener('pointerup',e=>pointerEnd(e,false));
 viewport.addEventListener('pointercancel',e=>pointerEnd(e,true));
 viewport.addEventListener('pointerleave',e=>{$('#eraserCursor').style.display='none';if(e.pointerType==='mouse')pointerEnd(e,false);});
-viewport.addEventListener('dblclick',e=>{
-  if(app.tool==='text'||app.tool==='lasso'||Date.now()-lastGestureAt<350)return;
-  e.preventDefault();
-  const rect=viewport.getBoundingClientRect();
-  const x=e.clientX-rect.left,y=e.clientY-rect.top;
-  animateZoom(app.zoom<1.35?1.65:1,x,y);
-});
 viewport.addEventListener('wheel',e=>{
   e.preventDefault();const rect=viewport.getBoundingClientRect();
   if(e.ctrlKey||Math.abs(e.deltaY)>Math.abs(e.deltaX)){
@@ -2146,7 +2147,7 @@ async function clearPage(){
 /* ============ 靜態圖示 ============ */
 function paintStaticIcons(){
   const map={libLogo:'brand',libDark:'moon',libImport:'import',libBackup:'export',
-    backLib:'back',togglePages:'pages',penModeBtn:'penmode',bookmarkBtn:'bookmark',
+    backLib:'back',togglePages:'pages',penModeBtn:'finger',bookmarkBtn:'bookmark',
     findBtn:'search',audioBtn:'audio',timerBtn:'timer',moreBtn:'more',
     colorMore:'palette',rulerBtn:'ruler',imageBtn:'image',
     undoBtn:'undo',redoBtn:'redo',floatUndoBtn:'undo',floatRedoBtn:'redo',clearBtn:'trash',
@@ -2340,6 +2341,8 @@ function init(){
   load();
   if(app.tiltSens==null)app.tiltSens=.5;
   if(app.smoothSens==null)app.smoothSens=.45;
+  if(app.touchDraw==null)app.touchDraw=false;
+  app.inputMode='pen';
   document.body.classList.toggle('dark',!!app.dark);
   setupCanvas();
   paintStaticIcons();
