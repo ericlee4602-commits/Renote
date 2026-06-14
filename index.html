@@ -273,6 +273,21 @@ body.dark .pal .swatch{border-color:rgba(50,42,36,.9)}
 .float-nav svg{width:17px;height:17px;stroke:currentColor;fill:none;stroke-width:2.1;stroke-linecap:round;stroke-linejoin:round}
 .float-nav .pn{font-size:12.5px;font-weight:700;color:var(--muted);min-width:54px;text-align:center;font-variant-numeric:tabular-nums}
 
+
+/* CollaNote-like 浮動復原 / 重做 + 觸控動畫 */
+.float-history{position:absolute;left:18px;bottom:18px;z-index:82;display:flex;align-items:center;gap:8px;
+  background:var(--panel);backdrop-filter:blur(14px);border:1px solid var(--line);border-radius:999px;padding:5px 7px;box-shadow:var(--shadow-soft)}
+.float-history button{width:38px;height:38px;border-radius:50%;display:grid;place-items:center;color:var(--text2);transition:transform .14s ease,background .14s ease,opacity .14s ease}
+.float-history button:hover{background:var(--card)}
+.float-history button:active{transform:scale(.9)}
+.float-history svg{width:18px;height:18px;stroke:currentColor;fill:none;stroke-width:2.1;stroke-linecap:round;stroke-linejoin:round}
+#canvasWrap.ui-animate{transition:transform .32s cubic-bezier(.18,.9,.22,1)}
+#canvasWrap.pinching{transition:none!important}
+button.tap-pop,.tool.tap-pop,.iconbtn.tap-pop,.pillbtn.tap-pop{animation:tapPop .2s cubic-bezier(.2,.8,.2,1)}
+@keyframes tapPop{0%{transform:scale(.94)}70%{transform:scale(1.04)}100%{transform:scale(1)}}
+.float-nav,.float-zoom,.float-history,.toolstrip,.drawer,.popover,.modal{will-change:transform,opacity}
+@media(max-width:600px){.float-history{left:12px;bottom:74px}.float-zoom{right:12px}.float-nav{bottom:14px}}
+
 /* ============ 右側面板（搜尋/錄音）============ */
 .drawer{position:fixed;top:130px;right:14px;width:min(340px,92vw);max-height:calc(100vh - 160px);z-index:160;
   background:var(--panel-solid);border:1px solid var(--line);border-radius:20px;box-shadow:var(--shadow);
@@ -385,6 +400,10 @@ body.dark .pal .swatch{border-color:rgba(50,42,36,.9)}
       <div id="eraserCursor"></div>
       <div id="ruler"><div class="ticks"></div><div class="rlabel">RULER</div><div class="rgrip" id="rulerGrip">⟲</div></div>
       <div id="selActions"></div>
+    </div>
+    <div class="float-history" title="復原 / 重做">
+      <button id="floatUndoBtn" title="復原 (Ctrl+Z)"></button>
+      <button id="floatRedoBtn" title="重做 (Ctrl+Y)"></button>
     </div>
     <div class="float-nav">
       <button id="prevPage" title="上一頁 (PgUp)"></button>
@@ -544,6 +563,7 @@ let recordStream=null, recorder=null, recordChunks=[];
 let timer=null, timerLeft=25*60;
 let undoStack=[], redoStack=[];
 let pointerMap=new Map(), pointerRoleMap=new Map(), gesture=null, action=null;
+let transformAnimTimer=null, lastGestureAt=0;
 let penPointerId=null, lastPenAt=0;      // 手掌拒絕：追蹤觸控筆狀態
 let lastStroke=null;                      // 筆跡縫合：{obj,t,end} 副廠筆訊號中斷時接續上一筆
 let laserFade=null;
@@ -719,7 +739,13 @@ function scheduleQuality(){ /* 縮放停止 0.18s 後重新取樣 */
   clearTimeout(rqTimer);
   rqTimer=setTimeout(()=>{const old=RQ;applyQuality(false);if(RQ!==old)renderAll();},180);
 }
-function applyTransform(){
+function enableTransformAnimation(ms=260){
+  wrap.classList.add('ui-animate');
+  clearTimeout(transformAnimTimer);
+  transformAnimTimer=setTimeout(()=>wrap.classList.remove('ui-animate'),ms+40);
+}
+function applyTransform(animate=false){
+  if(animate)enableTransformAnimation();
   wrap.style.transform=`translate(${app.panX}px,${app.panY}px) scale(${app.zoom})`;
   wrap.style.setProperty('--tx',app.panX+'px'); wrap.style.setProperty('--ty',app.panY+'px'); wrap.style.setProperty('--tz',app.zoom);
   $('#zoomLabel').textContent=Math.round(app.zoom*100)+'%';
@@ -728,7 +754,7 @@ function applyTransform(){
 function fitPage(){
   const r=viewport.getBoundingClientRect();
   app.zoom=Math.max(.24,Math.min((r.width-90)/PAGE_W,(r.height-100)/PAGE_H,1.4));
-  app.panX=(r.width-PAGE_W*app.zoom)/2; app.panY=26; applyTransform(); scheduleQuality();
+  app.panX=(r.width-PAGE_W*app.zoom)/2; app.panY=26; applyTransform(true); scheduleQuality();
 }
 function setZoom(z,cx,cy){
   const rect=viewport.getBoundingClientRect();
@@ -743,13 +769,13 @@ function animateZoom(targetZoom,cx,cy){
   const mx=cx!=null?cx:rect.width/2, my=cy!=null?cy:rect.height/2;
   targetZoom=Math.max(.22,Math.min(5,targetZoom));
   const z0=app.zoom,x0=app.panX,y0=app.panY;
-  /* 計算終點 pan，使對焦點固定 */
   const f=targetZoom/z0;
   const x1=mx-(mx-x0)*f, y1=my-(my-y0)*f;
   if(Math.abs(targetZoom-z0)<.001){return;}
   if(zoomAnim)cancelAnimationFrame(zoomAnim);
-  const t0=performance.now(),dur=260;
-  const ease=t=>1-Math.pow(1-t,3);
+  wrap.classList.remove('pinching');
+  const t0=performance.now(),dur=320;
+  const ease=t=>t<.5?4*t*t*t:1-Math.pow(-2*t+2,3)/2;
   (function step(now){
     let t=Math.min(1,(now-t0)/dur);const k=ease(t);
     app.zoom=z0+(targetZoom-z0)*k;app.panX=x0+(x1-x0)*k;app.panY=y0+(y1-y0)*k;
@@ -1106,7 +1132,7 @@ function pushAdd(obj){const pg=activePage();
            redo(){if(!pg.objects.some(o=>o.id===obj.id))pg.objects.push(obj);afterEdit(pg);}});}
 function undo(){if(!undoStack.length)return;lastStroke=null;const c=undoStack.pop();c.undo();redoStack.push(c);updateUndoUI();}
 function redo(){if(!redoStack.length)return;lastStroke=null;const c=redoStack.pop();c.redo();undoStack.push(c);updateUndoUI();}
-function updateUndoUI(){$('#undoBtn').style.opacity=undoStack.length?1:.4;$('#redoBtn').style.opacity=redoStack.length?1:.4;}
+function updateUndoUI(){['undoBtn','floatUndoBtn'].forEach(id=>{const el=$('#'+id);if(el)el.style.opacity=undoStack.length?1:.38;});['redoBtn','floatRedoBtn'].forEach(id=>{const el=$('#'+id);if(el)el.style.opacity=redoStack.length?1:.38;});}
 
 /* ============ 主渲染 ============ */
 function renderObjects(){const p=activePage();ctx.clearRect(0,0,PAGE_W,PAGE_H);if(!p)return;
@@ -1607,27 +1633,63 @@ function hasRealPenSignal(e){
     (typeof e.altitudeAngle==='number'&&e.altitudeAngle>0) ||
     !!(Number(e.tiltX)||Number(e.tiltY));
 }
-function classifyPointerInput(e){
+function classifyPointerInput(e,phase='move'){
   const pt=e.pointerType||'';
   const cs=contactSizeOf(e);
   const hasGeom=cs>1.5;
+  const penMode=(app.inputMode||'auto')==='pen';
+  const drawingTool=isDrawingCapableTool();
 
   if(pt==='mouse')return 'mouse';
   if(hasRealPenSignal(e))return 'pen';
   if(pt!=='touch')return 'finger';
 
-  /* 明顯大接觸面積才當手掌；門檻太低會把斜握筆、類紙膜筆觸誤殺 */
-  if(hasGeom&&cs>=42)return 'palm';
+  /* 只有非常明顯的大接觸面才視為手掌；斜握筆、類紙膜、金屬筆頭會放寬。 */
+  if(hasGeom&&cs>=72)return 'palm';
 
-  const penMode=(app.inputMode||'auto')==='pen';
-  const smallOrUnknown=!hasGeom||cs<=22;
+  const smallOrUnknown=!hasGeom||cs<=48;
+  const firstPointer=pointerMap.size===0;
+  const drawingNow=!!(action&&action.kind==='draw');
 
-  /* 重點修正：
-     筆模式 + 書寫工具 + 單點小面積/未知面積 touch => 視為觸控筆備援。
-     這能解決影片中「筆畫要試第 4、5 次才出現」的漏偵測問題。 */
-  if(penMode&&isDrawingCapableTool()&&smallOrUnknown)return 'pen';
+  /* 下筆優先：筆模式 + 書寫工具 + 單點 touch，一律先當作筆。
+     第二根手指按下時先保留給雙指縮放；若只是筆訊號中途換 pointerId，move 階段仍會接回。 */
+  if(penMode&&drawingTool&&smallOrUnknown){
+    if(firstPointer)return 'pen';
+    if(phase==='move'&&drawingNow&&Date.now()-lastPenAt<900)return 'pen';
+  }
 
   return 'finger';
+}
+function activePointers(){return [...pointerMap.values()].filter(p=>pointerRoleMap.get(p.pointerId)!=='palm');}
+function removeObjectById(id){const p=activePage();if(p&&id)p.objects=p.objects.filter(o=>o.id!==id);}
+function cancelTinyLiveStrokeForGesture(now){
+  if(!(action&&action.kind==='draw'))return false;
+  const age=now-(action.startedAt||now);
+  const pts=action.obj.points||[];
+  const first=pts[0]||{x:0,y:0}, last=pts[pts.length-1]||first;
+  const moved=Math.hypot(last.x-first.x,last.y-first.y);
+  if(age<=170&&pts.length<=8&&moved<18){
+    removeObjectById(action.obj.id);
+    action=null;lastStroke=null;penPointerId=null;
+    renderObjects();renderOverlay();
+    return true;
+  }
+  return false;
+}
+function startPinchGesture(arr){
+  if(arr.length<2)return false;
+  const a=arr[0],b=arr[1];
+  const rect=viewport.getBoundingClientRect();
+  wrap.classList.add('pinching');
+  gesture={
+    dist:Math.max(1,distance(a,b)),
+    cx:(a.clientX+b.clientX)/2,
+    cy:(a.clientY+b.clientY)/2,
+    zoom:app.zoom,panX:app.panX,panY:app.panY,
+    startedAt:performance.now(),rectLeft:rect.left,rectTop:rect.top
+  };
+  lastGestureAt=Date.now();
+  return true;
 }
 viewport.addEventListener('pointerdown',e=>{
   e.preventDefault();updateInputBadge(e.pointerType||'unknown');
@@ -1636,43 +1698,47 @@ viewport.addEventListener('pointerdown',e=>{
   const DRAW_KINDS=['draw','previewShape','rulerLine','laser','erase','lasso'];
   const drawTools=['pen','pencil','fountain','highlighter','eraser','laser','shape','lasso'];
   /* ── 以「接觸面積」判斷筆 / 手指 / 手掌（專業級手掌拒絕，不靠計時，永不漏筆） ── */
-  const pointerRole=classifyPointerInput(e);
+  const pointerRole=classifyPointerInput(e,'down');
   pointerRoleMap.set(e.pointerId,pointerRole);
   const stylusLike=pointerRole==='pen';
   const fingerLike=pointerRole==='finger';
   const palmLike=pointerRole==='palm';
+  if(palmLike){return;}
+
   if(stylusLike){
+    app._forceInkUntil=Date.now()+900;
     if((app.inputMode||'auto')==='auto'&&!app._penAutoSwitched){
       app._penAutoSwitched=true;app.inputMode='pen';updateInputModeUI();persistSoon();
-      toast('偵測到觸控筆 ✍️ 已自動開啟筆模式：手指 = 移動 / 縮放');
+      toast('偵測到觸控筆 ✍️ 已自動開啟筆模式：雙指移動 / 縮放');
     }
     /* 訊號抖動：筆還在畫卻送來新 pointerId → 直接接手原本那一筆，不中斷 */
     if(action&&action.kind==='draw'&&penPointerId!==null&&e.pointerId!==penPointerId){
-      pointerMap.delete(penPointerId);
+      pointerMap.delete(penPointerId);pointerRoleMap.delete(penPointerId);
       penPointerId=e.pointerId;lastPenAt=now;
       pointerMap.set(e.pointerId,e);viewport.setPointerCapture?.(e.pointerId);
       action.obj.points.push(samplePoint(e));renderLiveStroke();return;
     }
     penPointerId=e.pointerId;lastPenAt=now;
-    for(const [id,p] of pointerMap){if(id!==e.pointerId&&p.pointerType==='touch')pointerMap.delete(id);} /* 清掉手掌 */
-    gesture=null;
+    gesture=null;wrap.classList.remove('pinching');
     if(action&&action.kind==='pan')action=null;
   }else{
-    /* 非筆觸：寫字中或手掌大面積 → 一律忽略 */
     const penBusy=penPointerId!==null||(action&&DRAW_KINDS.includes(action.kind));
-    if(penBusy)return;
-    if(palmLike)return;
-    /* 其餘是手指 → 留給平移 / 縮放（筆模式）或書寫（Auto 模式） */
+    if(penBusy){
+      /* 第二根手指極快進來且第一筆還只是小點 → 視為雙指縮放，不留下墨點。 */
+      pointerMap.set(e.pointerId,e);viewport.setPointerCapture?.(e.pointerId);
+      const arr=activePointers();
+      if(arr.length>=2&&cancelTinyLiveStrokeForGesture(now)&&startPinchGesture(arr))return;
+      pointerMap.delete(e.pointerId);pointerRoleMap.delete(e.pointerId);return;
+    }
   }
   pointerMap.set(e.pointerId,e);viewport.setPointerCapture?.(e.pointerId);
-  if(pointerMap.size===2){
-    /* 正在畫的時候絕不啟動雙指手勢（避免手掌讓畫面震動） */
-    if(action&&DRAW_KINDS.includes(action.kind)){pointerMap.delete(e.pointerId);return;}
-    const arr=[...pointerMap.values()];
-    if(arr.some(p=>p.pointerType==='pen')){pointerMap.delete(e.pointerId);return;}
-    action=null;
-    gesture={dist:distance(arr[0],arr[1]),cx:(arr[0].clientX+arr[1].clientX)/2,cy:(arr[0].clientY+arr[1].clientY)/2,zoom:app.zoom,panX:app.panX,panY:app.panY};
-    return;
+  if(activePointers().length===2){
+    const arr=activePointers();
+    if(cancelTinyLiveStrokeForGesture(now)||!action){
+      action=null;
+      startPinchGesture(arr);
+      return;
+    }
   }
   if(e.pointerType==='mouse'&&e.button!==0&&e.button!==1)return;
   const pos=samplePoint(e);
@@ -1680,7 +1746,7 @@ viewport.addEventListener('pointerdown',e=>{
   if(['pen','gel','fountain','brush','pencil','marker','crayon','highlighter'].includes(app.tool)&&!app.rulerOn&&lastStroke&&lastStroke.pg===app.activePageId&&now-lastStroke.t<lastStroke.win){
     const d=Math.hypot(pos.x-lastStroke.end.x,pos.y-lastStroke.end.y);
     if(d<16+30/app.zoom){
-      action={kind:'draw',obj:lastStroke.obj,stitched:true};
+      action={kind:'draw',obj:lastStroke.obj,stitched:true,startedAt:now};
       action.obj.points.push(pos);lastStroke=null;renderLiveStroke();return;
     }
   }
@@ -1698,7 +1764,7 @@ viewport.addEventListener('pointerdown',e=>{
     startTextAt(hit?{x:hit.x,y:hit.y}:pos,hit||null);return;
   }
   if(app.tool==='stamp'){addStampAt(pos);return;}
-  if(app.tool==='eraser'){pushUndo();action={kind:'erase'};eraseAt(pos);return;}
+  if(app.tool==='eraser'){pushUndo();action={kind:'erase',startedAt:now};eraseAt(pos);return;}
   if(app.tool==='lasso'){
     const sel=getSelectedObjects();
     const b=boundsOfObjects(sel);
@@ -1714,28 +1780,28 @@ viewport.addEventListener('pointerdown',e=>{
         pushUndo();action={kind:'moveSelection',last:pos};return;
       }
     }
-    action={kind:'lasso',points:[pos]};renderOverlay();return;
+    action={kind:'lasso',startedAt:now,points:[pos]};renderOverlay();return;
   }
   if(app.tool==='shape'){
-    action={kind:'previewShape',start:pos,obj:{id:uid('obj'),type:'shape',shape:app.shape,color:app.color,width:app.width,
+    action={kind:'previewShape',startedAt:now,start:pos,obj:{id:uid('obj'),type:'shape',shape:app.shape,color:app.color,width:app.width,
       opacity:app.opacity,fill:app.shapeFill?hexWithAlpha(app.color,.25):'transparent',p1:pos,p2:pos}};
     renderOverlay();return;
   }
   if(app.tool==='laser'){
-    action={kind:'laser',obj:currentStroke([pos])};action.obj.color='#d65757';action.obj.opacity=.95;renderOverlay();return;
+    action={kind:'laser',startedAt:now,obj:currentStroke([pos])};action.obj.color='#d65757';action.obj.opacity=.95;renderOverlay();return;
   }
   if(app.rulerOn&&['pen','pencil','fountain','highlighter'].includes(app.tool)){
-    action={kind:'rulerLine',start:pos,obj:{id:uid('obj'),type:'shape',shape:'line',color:app.color,
+    action={kind:'rulerLine',startedAt:now,start:pos,obj:{id:uid('obj'),type:'shape',shape:'line',color:app.color,
       width:app.tool==='highlighter'?app.width*3:app.width,opacity:app.tool==='highlighter'?.45:app.opacity,p1:pos,p2:pos}};
     renderOverlay();return;
   }
-  action={kind:'draw',obj:currentStroke([pos])};activePage().objects.push(action.obj);renderObjects();renderLiveStroke();
+  action={kind:'draw',startedAt:now,obj:currentStroke([pos])};activePage().objects.push(action.obj);renderObjects();renderLiveStroke();
 });
 viewport.addEventListener('pointermove',e=>{
   e.preventDefault();showEraserCursor(e);
   if(!pointerMap.has(e.pointerId)){
     /* 高傾角/抖動時系統可能用新 ID 續傳，沒有 pointerdown → 收編進進行中的筆畫 */
-    const pointerRole=classifyPointerInput(e);
+    const pointerRole=classifyPointerInput(e,'move');
     const stylusM=pointerRole==='pen';
     if(stylusM&&action&&action.kind==='draw'){
       pointerMap.set(e.pointerId,e);pointerRoleMap.set(e.pointerId,pointerRole);
@@ -1744,13 +1810,14 @@ viewport.addEventListener('pointermove',e=>{
     }else{updateInputBadge(e.pointerType||app.lastPointerType);return;}
   }
   pointerMap.set(e.pointerId,e);
-  if(pointerMap.size===2&&gesture){
-    const arr=[...pointerMap.values()];const dist=distance(arr[0],arr[1]);
+  if(activePointers().length>=2&&gesture){
+    const arr=activePointers().slice(0,2);const dist=Math.max(1,distance(arr[0],arr[1]));
     const cx=(arr[0].clientX+arr[1].clientX)/2,cy=(arr[0].clientY+arr[1].clientY)/2;
     const factor=dist/gesture.dist;const rect=viewport.getBoundingClientRect();
     const vx=gesture.cx-rect.left,vy=gesture.cy-rect.top,nx=cx-rect.left,ny=cy-rect.top;
     app.zoom=Math.max(.22,Math.min(5,gesture.zoom*factor));
-    app.panX=nx-(vx-gesture.panX)*factor;app.panY=ny-(vy-gesture.panY)*factor;applyTransform();scheduleQuality();return;
+    app.panX=nx-(vx-gesture.panX)*factor;app.panY=ny-(vy-gesture.panY)*factor;
+    applyTransform();scheduleQuality();return;
   }
   if(!action)return;
   const pos=samplePoint(e);
@@ -1782,12 +1849,13 @@ function pointerEnd(e,cancelled){
     try{const last=action.obj.points[action.obj.points.length-1];const fp=samplePoint(e);
       if(!last||Math.hypot(fp.x-last.x,fp.y-last.y)>.3){action.obj.points.push(fp);renderLiveStroke();}}catch(_){}
   }
-  pointerMap.delete(e.pointerId);pointerRoleMap.delete(e.pointerId);if(pointerMap.size<2)gesture=null;
+  pointerMap.delete(e.pointerId);pointerRoleMap.delete(e.pointerId);if(activePointers().length<2){gesture=null;wrap.classList.remove('pinching');}
   if(e.pointerId===penPointerId){penPointerId=null;lastPenAt=Date.now();}
   if(pointerMap.size)return;
   if(!action)return;
   const a=action;action=null;
   if(a.kind==='draw'){
+    app._forceInkUntil=Date.now()+1200;
     const pts=a.obj.points;
     /* 訊號被切斷（cancel）→ 給 650ms 縫合窗；正常提筆 → 僅 120ms 防誤接（漢字筆畫不會被黏在一起） */
     lastStroke={obj:a.obj,t:Date.now(),end:pts[pts.length-1]||{x:0,y:0},pg:app.activePageId,win:cancelled?650:120};
@@ -1818,6 +1886,13 @@ function pointerEnd(e,cancelled){
 viewport.addEventListener('pointerup',e=>pointerEnd(e,false));
 viewport.addEventListener('pointercancel',e=>pointerEnd(e,true));
 viewport.addEventListener('pointerleave',e=>{$('#eraserCursor').style.display='none';if(e.pointerType==='mouse')pointerEnd(e,false);});
+viewport.addEventListener('dblclick',e=>{
+  if(app.tool==='text'||app.tool==='lasso'||Date.now()-lastGestureAt<350)return;
+  e.preventDefault();
+  const rect=viewport.getBoundingClientRect();
+  const x=e.clientX-rect.left,y=e.clientY-rect.top;
+  animateZoom(app.zoom<1.35?1.65:1,x,y);
+});
 viewport.addEventListener('wheel',e=>{
   e.preventDefault();const rect=viewport.getBoundingClientRect();
   if(e.ctrlKey||Math.abs(e.deltaY)>Math.abs(e.deltaX)){
@@ -2074,7 +2149,7 @@ function paintStaticIcons(){
     backLib:'back',togglePages:'pages',penModeBtn:'penmode',bookmarkBtn:'bookmark',
     findBtn:'search',audioBtn:'audio',timerBtn:'timer',moreBtn:'more',
     colorMore:'palette',rulerBtn:'ruler',imageBtn:'image',
-    undoBtn:'undo',redoBtn:'redo',clearBtn:'trash',
+    undoBtn:'undo',redoBtn:'redo',floatUndoBtn:'undo',floatRedoBtn:'redo',clearBtn:'trash',
     sbAdd:'add',sbDup:'duplicate',sbDel:'trash',
     prevPage:'prev',nextPage:'next',zoomIn:'plus',zoomOut:'minus',fitBtn:'fit'};
   for(const id in map){const el=document.getElementById(id);if(!el)continue;
@@ -2138,7 +2213,7 @@ function bindUI(){
     toast(app.rulerOn?'直尺已開啟（可拖曳，握把可旋轉）':'直尺已關閉');
   };
   $('#imageBtn').onclick=()=>$('#importFile').click();
-  $('#undoBtn').onclick=undo;$('#redoBtn').onclick=redo;
+  $('#undoBtn').onclick=undo;$('#redoBtn').onclick=redo;$('#floatUndoBtn').onclick=undo;$('#floatRedoBtn').onclick=redo;
   $('#clearBtn').onclick=clearPage;
 
   /* 側欄 */
@@ -2183,6 +2258,14 @@ function bindUI(){
   $('#importFile').addEventListener('change',e=>{
     const f=e.target.files[0];handleImport(f);e.target.value='';
   });
+
+  /* UI 點擊動畫：工具、浮動按鈕、頁面/縮放控制都有輕微回彈 */
+  document.addEventListener('pointerdown',e=>{
+    const b=e.target.closest('button,.tool,.iconbtn,.pillbtn');
+    if(!b)return;
+    b.classList.remove('tap-pop');void b.offsetWidth;b.classList.add('tap-pop');
+    setTimeout(()=>b.classList.remove('tap-pop'),220);
+  },{passive:true});
 
   /* 抽屜關閉 / 對話框遮罩 */
   $$('[data-close]').forEach(b=>b.onclick=()=>$('#'+b.dataset.close).classList.remove('show'));
