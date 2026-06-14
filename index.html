@@ -1594,39 +1594,34 @@ viewport.addEventListener('pointerdown',e=>{
   const now=Date.now();
   const DRAW_KINDS=['draw','previewShape','rulerLine','laser','erase','lasso'];
   const drawTools=['pen','pencil','fountain','highlighter','eraser','laser','shape','lasso'];
-  /* ── 觸控筆優先：筆落下時清掉所有手指（手掌），並取消手掌造成的平移/手勢 ── */
-  if(e.pointerType==='pen'){
-    /* 首次偵測到觸控筆 → 自動切到「手指=移動畫布」模式（類 GoodNotes） */
+  /* ── 以「接觸面積」判斷筆 / 手指 / 手掌（專業級手掌拒絕，不靠計時，永不漏筆） ── */
+  const cs=Math.max(e.width||0,e.height||0);
+  const geom=cs>1.5;                                   /* 裝置有回報真實接觸大小 */
+  const stylusLike=e.pointerType==='pen'||(e.pointerType==='touch'&&geom&&cs<=14);
+  const fingerLike=e.pointerType==='touch'&&(!geom||cs>14);
+  const palmLike=e.pointerType==='touch'&&geom&&cs>=42;
+  if(stylusLike){
     if((app.inputMode||'auto')==='auto'&&!app._penAutoSwitched){
       app._penAutoSwitched=true;app.inputMode='pen';updateInputModeUI();persistSoon();
       toast('偵測到觸控筆 ✍️ 已自動開啟筆模式：手指 = 移動 / 縮放');
     }
-    /* 副廠筆訊號抖動：筆還在畫卻送來新的 pointerId → 直接接手原本那一筆，不中斷 */
+    /* 訊號抖動：筆還在畫卻送來新 pointerId → 直接接手原本那一筆，不中斷 */
     if(action&&action.kind==='draw'&&penPointerId!==null&&e.pointerId!==penPointerId){
       pointerMap.delete(penPointerId);
       penPointerId=e.pointerId;lastPenAt=now;
       pointerMap.set(e.pointerId,e);viewport.setPointerCapture?.(e.pointerId);
-      const pos0=samplePoint(e);
-      action.obj.points.push(pos0);renderObjects();renderLiveStroke();return;
+      action.obj.points.push(samplePoint(e));renderLiveStroke();return;
     }
     penPointerId=e.pointerId;lastPenAt=now;
-    for(const [id,p] of pointerMap){if(p.pointerType==='touch')pointerMap.delete(id);}
+    for(const [id,p] of pointerMap){if(id!==e.pointerId&&p.pointerType==='touch')pointerMap.delete(id);} /* 清掉手掌 */
     gesture=null;
     if(action&&action.kind==='pan')action=null;
-  }
-  /* ── 手掌拒絕：筆還壓著、正在畫、或剛畫完冷卻期內 → 完全忽略手指觸碰 ── */
-  if(e.pointerType==='touch'){
+  }else{
+    /* 非筆觸：寫字中或手掌大面積 → 一律忽略 */
     const penBusy=penPointerId!==null||(action&&DRAW_KINDS.includes(action.kind));
-    const coolingDown=drawTools.includes(app.tool)&&now-lastPenAt<600;
-    if(penBusy||coolingDown){
-      /* 例外：副廠筆訊號被系統誤判成 touch —— 若落點緊接上一筆結尾，視為筆訊號放行（交給筆跡縫合） */
-      let stitchable=false;
-      if(!penBusy&&lastStroke&&lastStroke.pg===app.activePageId&&now-lastStroke.t<lastStroke.win){
-        const p0=clientToPage(e.clientX,e.clientY);
-        stitchable=Math.hypot(p0.x-lastStroke.end.x,p0.y-lastStroke.end.y)<16+30/app.zoom;
-      }
-      if(!stitchable)return;
-    }
+    if(penBusy)return;
+    if(palmLike)return;
+    /* 其餘是手指 → 留給平移 / 縮放（筆模式）或書寫（Auto 模式） */
   }
   pointerMap.set(e.pointerId,e);viewport.setPointerCapture?.(e.pointerId);
   if(pointerMap.size===2){
@@ -1640,12 +1635,12 @@ viewport.addEventListener('pointerdown',e=>{
   }
   if(e.pointerType==='mouse'&&e.button!==0&&e.button!==1)return;
   const pos=samplePoint(e);
-  /* ── 筆跡縫合：副廠筆訊號不穩中斷後，極短時間內在附近落筆 → 自動接續上一筆 ── */
-  if(['pen','pencil','fountain','highlighter'].includes(app.tool)&&!app.rulerOn&&lastStroke&&lastStroke.pg===app.activePageId&&now-lastStroke.t<lastStroke.win){
+  /* ── 筆跡縫合：筆訊號中斷後極短時間內在附近落筆 → 接續上一筆 ── */
+  if(['pen','gel','fountain','brush','pencil','marker','crayon','highlighter'].includes(app.tool)&&!app.rulerOn&&lastStroke&&lastStroke.pg===app.activePageId&&now-lastStroke.t<lastStroke.win){
     const d=Math.hypot(pos.x-lastStroke.end.x,pos.y-lastStroke.end.y);
     if(d<16+30/app.zoom){
       action={kind:'draw',obj:lastStroke.obj,stitched:true};
-      action.obj.points.push(pos);lastStroke=null;renderObjects();renderLiveStroke();return;
+      action.obj.points.push(pos);lastStroke=null;renderLiveStroke();return;
     }
   }
   /* Notability 式點按定位：開啟後點筆跡 → 跳到當時錄音 */
@@ -1654,7 +1649,8 @@ viewport.addEventListener('pointerdown',e=>{
     if(hit){const a=app._seekRec.audio;try{a.currentTime=Math.max(0,hit.at/1000);a.play();}catch(_){}
       pointerMap.delete(e.pointerId);toast('▶ 跳到 '+fmtTime(hit.at/1000));return;}
   }
-  const hand=app.tool==='hand'||keys.space||e.button===1||isPenOnlyTouch(e);
+  const fingerPan=fingerLike&&(app.inputMode||'auto')==='pen';
+  const hand=app.tool==='hand'||keys.space||e.button===1||fingerPan;
   if(hand){action={kind:'pan',last:{x:e.clientX,y:e.clientY}};return;}
   if(app.tool==='text'){
     const hit=[...activePage().objects].reverse().find(o=>o.type==='text'&&pointInRect(pos,objectBounds(o)));
@@ -1697,8 +1693,10 @@ viewport.addEventListener('pointerdown',e=>{
 viewport.addEventListener('pointermove',e=>{
   e.preventDefault();showEraserCursor(e);
   if(!pointerMap.has(e.pointerId)){
-    /* 高傾角時系統可能用新 ID 續傳，沒有 pointerdown → 收編進進行中的筆畫，避免斷線 */
-    if(e.pointerType==='pen'&&action&&action.kind==='draw'){
+    /* 高傾角/抖動時系統可能用新 ID 續傳，沒有 pointerdown → 收編進進行中的筆畫 */
+    const csm=Math.max(e.width||0,e.height||0);
+    const stylusM=e.pointerType==='pen'||(e.pointerType==='touch'&&csm>1.5&&csm<=14);
+    if(stylusM&&action&&action.kind==='draw'){
       pointerMap.set(e.pointerId,e);penPointerId=e.pointerId;lastPenAt=Date.now();
       viewport.setPointerCapture?.(e.pointerId);
     }else{updateInputBadge(e.pointerType||app.lastPointerType);return;}
