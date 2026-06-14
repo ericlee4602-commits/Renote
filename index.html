@@ -452,6 +452,10 @@ body.dark .pal .swatch{border-color:rgba(50,42,36,.9)}
 
 <!-- 更多選單 -->
 <div class="popover" id="morePop" style="width:min(290px,92vw)">
+  <h4>觸控筆 / 螢幕</h4>
+  <div class="chip-row" id="nibChips"></div>
+  <div class="slider-row" style="margin-top:7px"><label class="small" style="min-width:52px">傾角靈敏</label><input type="range" id="tiltRange" min="0" max="1" step="0.05"><span class="val" id="tiltVal">中</span></div>
+  <div class="slider-row"><label class="small" style="min-width:52px">防抖平滑</label><input type="range" id="smoothRange" min="0" max="1" step="0.05"><span class="val" id="smoothVal">中</span></div>
   <h4>頁面紙樣</h4>
   <div class="chip-row" id="templateChips"></div>
   <h4>匯出</h4>
@@ -548,7 +552,7 @@ const COLORS=['#3f352f','#7d675e','#546a5e','#5d6f8e','#b56b5b','#c69a56','#8a6b
 const COVER_COLORS=[['#8a6b5a','#6d5446'],['#5d6f8e','#46546e'],['#7f9079','#60705c'],['#b07a8c','#8d5f70'],
   ['#c69a56','#a37c3f'],['#6d8f91','#527073'],['#8a6b8f','#6c5270'],['#43372e','#2e2620']];
 const WIDTH_PRESETS=[2,4,7,12];
-const PEN_TYPES=[['pen','pen','鋼筆'],['pencil','pencil','鉛筆'],['fountain','calligraphy','書法筆'],['highlighter','highlighter','螢光筆']];
+const PEN_TYPES=[['pen','pen','鋼筆'],['gel','gel','中性筆'],['fountain','calligraphy','鋼筆書法'],['brush','brush','毛筆'],['pencil','pencil','鉛筆'],['marker','marker','麥克筆'],['crayon','crayon','蠟筆'],['highlighter','highlighter','螢光筆']];
 const PEN_IDS=PEN_TYPES.map(t=>t[0]);
 const TOOLS=[
   ['hand','hand','移動'],['write','pen','書寫'],['eraser','eraser','橡皮'],['lasso','lasso','套索'],
@@ -565,6 +569,10 @@ const STICKER_SETS={
 };
 
 const ICONS={
+  gel:'<svg viewBox="0 0 24 24"><path d="M16.5 3.4a2 2 0 0 1 2.8 0l1.3 1.3a2 2 0 0 1 0 2.8L9 19.1l-4 1.4 1.4-4L16.5 3.4z"/><path d="m14.4 5.5 4.1 4.1"/><circle cx="6.6" cy="17.4" r=".9" fill="currentColor" stroke="none"/></svg>',
+  brush:'<svg viewBox="0 0 24 24"><path d="M14 4c3 3 4.5 6 4.5 8.7 0 3-2.4 5.3-5.5 5.3-1 0-1.9-.2-2.7-.6"/><path d="M10.3 17.4c.2 1.6-.4 3-1.7 3.6-1.6.7-3.3 0-4.6-1.1 1.7-.2 2.3-1 2.5-2.3.2-1.2 1.1-2 2.3-1.9 .9.1 1.4.8 1.5 1.7z" fill="currentColor" stroke="none"/></svg>',
+  marker:'<svg viewBox="0 0 24 24"><path d="M8 14 16.5 5.5a2 2 0 0 1 2.8 0l1.2 1.2a2 2 0 0 1 0 2.8L12 18H8v-4z"/><path d="M8 14l-3.5 3.5a1.5 1.5 0 0 0 0 2.1l0 0a1.5 1.5 0 0 0 2.1 0L10 16"/><path d="M3 21h7" stroke-width="2.6"/></svg>',
+  crayon:'<svg viewBox="0 0 24 24"><path d="M7 21 4 18 14.5 7.5a1.6 1.6 0 0 1 2.2 0L18.5 9.3a1.6 1.6 0 0 1 0 2.2L8 21H7z"/><path d="M14 8.5 17 11.5"/><path d="M4 18l-1 3 3-1" fill="currentColor" stroke="none"/></svg>',
   brand:'<svg viewBox="0 0 24 24"><path d="M6 18c6-2 10-7 12-14"/><path d="M8 15c1.8.1 3.5.8 4.9 2.1"/><path d="M5 19c1.8-1 4.2-1.1 6.1-.1"/><path d="M15.5 4.5c1.2-.8 2.3-.8 3.2.1.9.9.9 2 0 3.2"/></svg>',
   hand:'<svg viewBox="0 0 24 24"><path d="M8 13V6.2a1.4 1.4 0 0 1 2.8 0V11"/><path d="M10.8 11V4.4a1.4 1.4 0 0 1 2.8 0V11"/><path d="M13.6 11V5.6a1.4 1.4 0 0 1 2.8 0V12"/><path d="M16.4 12V8a1.4 1.4 0 0 1 2.8 0v6.5c0 4-2.6 7-6.7 7-2.7 0-4.3-1-5.6-2.7l-3.3-4.5a1.5 1.5 0 0 1 2.3-1.9L8 14.5V13"/></svg>',
   pen:'<svg viewBox="0 0 24 24"><path d="M17 3.3a2.4 2.4 0 0 1 3.4 0l.3.3a2.4 2.4 0 0 1 0 3.4L8.5 19.2 3 21l1.8-5.5L17 3.3z"/><path d="m14.8 5.5 3.7 3.7"/><path d="m4.8 15.5 3.7 3.7"/></svg>',
@@ -710,7 +718,27 @@ function setZoom(z,cx,cy){
 }
 function clientToPage(x,y){const r=wrap.getBoundingClientRect(); return {x:(x-r.left)/app.zoom,y:(y-r.top)/app.zoom};}
 function pageToClient(x,y){const vr=viewport.getBoundingClientRect(), wr=wrap.getBoundingClientRect(); return {x:wr.left-vr.left+x*app.zoom,y:wr.top-vr.top+y*app.zoom};}
-function clampPoint(p){return {x:Math.max(-200,Math.min(PAGE_W+200,p.x)),y:Math.max(-200,Math.min(PAGE_H+200,p.y)),p:p.p||.5};}
+function clampPoint(p){return {x:Math.max(-200,Math.min(PAGE_W+200,p.x)),y:Math.max(-200,Math.min(PAGE_H+200,p.y)),p:p.p||.5,tl:p.tl||0,t:p.t||0};}
+/* 從事件擷取完整筆觸資料：位置、壓力、傾角、時間 —— 對副廠筆/金屬筆頭/類紙膜做容錯 */
+function tiltOf(ev){
+  /* 優先用 altitudeAngle（弧度，π/2=垂直）；否則用 tiltX/tiltY */
+  if(typeof ev.altitudeAngle==='number'&&ev.altitudeAngle>0){
+    return Math.max(0,Math.min(1,1-ev.altitudeAngle/(Math.PI/2))); /* 0=垂直, 1=極平躺 */
+  }
+  const tx=ev.tiltX||0,ty=ev.tiltY||0;
+  if(tx||ty)return Math.max(0,Math.min(1,Math.hypot(tx,ty)/90));
+  return 0;
+}
+function rawPressure(ev){
+  let pr=ev.pressure;
+  /* 金屬筆頭/類紙膜常回報 0 或 NaN，視為「未知」而非「沒接觸」 */
+  if(pr==null||isNaN(pr)||pr<=0)return -1;
+  return pr;
+}
+function samplePoint(ev){
+  const pg=clientToPage(ev.clientX,ev.clientY);
+  return clampPoint({x:pg.x,y:pg.y,p:Math.max(.02,rawPressure(ev)<0?.5:rawPressure(ev)),tl:tiltOf(ev),t:ev.timeStamp||performance.now()});
+}
 
 /* ============ 紙樣 ============ */
 function drawTemplateTo(c,tpl,w=PAGE_W,h=PAGE_H){
@@ -763,42 +791,86 @@ function drawObject(c,obj,preview){
   else if(obj.type==='stamp')drawStampObject(c,obj);
   else if(obj.type==='image')drawImageObject(c,obj);
 }
-/* ============ 筆跡引擎（CollaNote 級平滑度） ============ */
-/* 1) 點前處理：去除過密點 + 位置指數平滑（消除手震與訊號抖動） */
-function refinePts(raw){
-  if(raw.length<3)return raw.map(p=>({x:p.x,y:p.y,p:p.p??.5}));
-  const out=[{x:raw[0].x,y:raw[0].y,p:raw[0].p??.5}];
-  for(let i=1;i<raw.length;i++){
-    const q=raw[i],last=out[out.length-1];
-    if(Math.hypot(q.x-last.x,q.y-last.y)<.7&&i<raw.length-1)continue; /* 太密 → 略過 */
-    const a=.42; /* 位置平滑 */
-    out.push({x:last.x*(1-a)+q.x*a,y:last.y*(1-a)+q.y*a,p:q.p??.5});
+/* ============ 筆跡引擎（CollaNote 級平滑度 + 多傾角容錯） ============ */
+/* 工具：依使用者「防抖平滑」設定取得平滑強度 0..1 */
+function smoothK(obj){const base=(obj&&obj.smooth!=null)?obj.smooth:(app.smoothSens??.5);return Math.max(0,Math.min(1,base));}
+/* 中位數濾波：壓制金屬筆頭/類紙膜造成的壓力突波 */
+function medianFilter(arr,r){
+  if(arr.length<3)return arr.slice();
+  const out=new Array(arr.length);
+  for(let i=0;i<arr.length;i++){
+    const a=Math.max(0,i-r),b=Math.min(arr.length-1,i+r);
+    const w=arr.slice(a,b+1).slice().sort((x,y)=>x-y);
+    out[i]=w[w.length>>1];
   }
-  out.push({x:raw[raw.length-1].x,y:raw[raw.length-1].y,p:raw[raw.length-1].p??.5});
   return out;
 }
-/* 2) 每點寬度：壓力或速度 → 強平滑，避免粗細跳動 */
-function widthProfile(pts,base,minK,maxK){
-  const ps=pts.map(p=>p.p??.5);
-  const varies=Math.max(...ps)-Math.min(...ps)>.08;
-  const out=new Array(pts.length);let prev=null;
-  for(let i=0;i<pts.length;i++){
+/* 1) 點前處理：去重 → 位置平滑 → 重新取樣等距 → Catmull-Rom 補點（極滑） */
+function refinePts(raw,obj){
+  const K=smoothK(obj);
+  if(raw.length<2)return raw.map(p=>({x:p.x,y:p.y,p:p.p??.5,tl:p.tl||0}));
+  /* 去除過近點 */
+  let pts=[{x:raw[0].x,y:raw[0].y,p:raw[0].p??.5,tl:raw[0].tl||0}];
+  for(let i=1;i<raw.length;i++){
+    const q=raw[i],last=pts[pts.length-1];
+    if(Math.hypot(q.x-last.x,q.y-last.y)<.6&&i<raw.length-1)continue;
+    pts.push({x:q.x,y:q.y,p:q.p??.5,tl:q.tl||0});
+  }
+  if(pts.length<2)return pts;
+  /* 位置指數平滑（雙向，消相位差）；K 越大越平滑 */
+  const a=.30+K*.45;
+  for(let pass=0;pass<2;pass++){
+    const seq=pass?pts.slice().reverse():pts;
+    for(let i=1;i<seq.length;i++){seq[i].x=seq[i-1].x*(1-a)+seq[i].x*a;seq[i].y=seq[i-1].y*(1-a)+seq[i].y*a;}
+    if(pass)pts=seq.reverse();
+  }
+  /* Catmull-Rom：每段插 N 個中間點，曲線連續可微 → 無折角 */
+  const seg=3+Math.round(K*3);
+  const out=[];
+  const P=i=>pts[Math.max(0,Math.min(pts.length-1,i))];
+  for(let i=0;i<pts.length-1;i++){
+    const p0=P(i-1),p1=P(i),p2=P(i+1),p3=P(i+2);
+    for(let j=0;j<seg;j++){
+      const t=j/seg,t2=t*t,t3=t2*t;
+      const x=.5*((2*p1.x)+(-p0.x+p2.x)*t+(2*p0.x-5*p1.x+4*p2.x-p3.x)*t2+(-p0.x+3*p1.x-3*p2.x+p3.x)*t3);
+      const y=.5*((2*p1.y)+(-p0.y+p2.y)*t+(2*p0.y-5*p1.y+4*p2.y-p3.y)*t2+(-p0.y+3*p1.y-3*p2.y+p3.y)*t3);
+      const pr=p1.p+(p2.p-p1.p)*t, tl=p1.tl+(p2.tl-p1.tl)*t;
+      out.push({x,y,p:pr,tl});
+    }
+  }
+  out.push({x:pts[pts.length-1].x,y:pts[pts.length-1].y,p:pts[pts.length-1].p,tl:pts[pts.length-1].tl});
+  return out;
+}
+/* 2) 每點寬度：壓力 + 傾角 + 速度三來源融合，任何傾角都不掉線、不爆寬 */
+function widthProfile(pts,base,minK,maxK,obj){
+  const n=pts.length;
+  const tiltSens=(obj&&obj.tilt!=null)?obj.tilt:(app.tiltSens??.5);
+  /* 壓力：先中位數濾波去突波，再平滑 */
+  let ps=medianFilter(pts.map(p=>p.p??.5),2);
+  const pVar=Math.max(...ps)-Math.min(...ps);
+  const usePressure=pVar>.06;   /* 壓力真的有變化才採用，否則改速度 */
+  const tl=pts.map(p=>p.tl||0);
+  const tlVar=Math.max(...tl)-Math.min(...tl);
+  const out=new Array(n);let prev=null;
+  for(let i=0;i<n;i++){
     let t;
-    if(varies)t=ps[i];
-    else{const d=i?Math.hypot(pts[i].x-pts[i-1].x,pts[i].y-pts[i-1].y):2;t=Math.max(.2,Math.min(1,1.12-d/30));}
-    t=prev==null?t:prev*.78+t*.22;prev=t;       /* 寬度強平滑 */
+    if(usePressure)t=ps[i];
+    else{const d=i?Math.hypot(pts[i].x-pts[i-1].x,pts[i].y-pts[i-1].y):2;t=Math.max(.18,Math.min(1,1.1-d/34));}
+    /* 傾角加成：筆越平躺、線越粗（模擬鉛筆側鋒/毛筆鋪毫），靈敏度可調 */
+    if(tlVar>.02)t=t*(1-tiltSens*.5)+ (t*(1+tl[i]*1.4))*(tiltSens*.5);
+    t=Math.max(.05,Math.min(1.3,t));
+    t=prev==null?t:prev*.82+t*.18;prev=t;     /* 寬度強平滑 */
     out[i]=base*(minK+t*(maxK-minK));
   }
-  /* 兩端筆鋒：頭 12%、尾 18% 漸細 */
-  const n=out.length;
+  /* 兩端筆鋒 */
   for(let i=0;i<n;i++){
-    const headT=Math.min(1,i/Math.max(2,n*.12));
-    const tailT=Math.min(1,(n-1-i)/Math.max(2,n*.18));
-    out[i]*=(.25+.75*headT)*(.2+.8*tailT);
+    const headT=Math.min(1,i/Math.max(2,n*.10));
+    const tailT=Math.min(1,(n-1-i)/Math.max(2,n*.16));
+    out[i]*=(.28+.72*headT)*(.22+.78*tailT);
   }
   return out;
 }
-/* 3) 將中心線 + 寬度展開成封閉輪廓，一次填滿 → 無接縫、無疊色斑點、自帶圓頭 */
+/* 3) 中心線 + 寬度 → 封閉輪廓一次填滿（無接縫、圓頭、方向安全） */
 function strokeOutline(c,pts,wArr){
   const n=pts.length;
   if(n===1){c.beginPath();c.arc(pts[0].x,pts[0].y,Math.max(.5,wArr[0]/2),0,Math.PI*2);c.fill();return;}
@@ -810,61 +882,63 @@ function strokeOutline(c,pts,wArr){
     L.push({x:pts[i].x-dy*w,y:pts[i].y+dx*w});
     R.push({x:pts[i].x+dy*w,y:pts[i].y-dx*w});
   }
-  c.beginPath();
-  c.moveTo(L[0].x,L[0].y);
+  c.beginPath();c.moveTo(L[0].x,L[0].y);
   for(let i=1;i<n-1;i++){const mx=(L[i].x+L[i+1].x)/2,my=(L[i].y+L[i+1].y)/2;c.quadraticCurveTo(L[i].x,L[i].y,mx,my);}
   c.lineTo(L[n-1].x,L[n-1].y);
-  /* 尾端圓頭（以方向外推的控制點繪出，任何書寫方向都正確） */
-  {const a=pts[n-2],b=pts[n-1];let dx=b.x-a.x,dy=b.y-a.y;const l=Math.hypot(dx,dy)||1;dx/=l;dy/=l;
-   const r=Math.max(.4,wArr[n-1])/2,tx=b.x+dx*r*1.2,ty=b.y+dy*r*1.2;
-   c.quadraticCurveTo(tx,ty,R[n-1].x,R[n-1].y);}
+  {const aa=pts[n-2],b=pts[n-1];let dx=b.x-aa.x,dy=b.y-aa.y;const l=Math.hypot(dx,dy)||1;dx/=l;dy/=l;
+   const r=Math.max(.4,wArr[n-1])/2,tx=b.x+dx*r*1.2,ty=b.y+dy*r*1.2;c.quadraticCurveTo(tx,ty,R[n-1].x,R[n-1].y);}
   for(let i=n-2;i>0;i--){const mx=(R[i].x+R[i-1].x)/2,my=(R[i].y+R[i-1].y)/2;c.quadraticCurveTo(R[i].x,R[i].y,mx,my);}
   c.lineTo(R[0].x,R[0].y);
-  /* 頭端圓頭 */
-  {const a=pts[1],b=pts[0];let dx=b.x-a.x,dy=b.y-a.y;const l=Math.hypot(dx,dy)||1;dx/=l;dy/=l;
-   const r=Math.max(.4,wArr[0])/2,tx=b.x+dx*r*1.2,ty=b.y+dy*r*1.2;
-   c.quadraticCurveTo(tx,ty,L[0].x,L[0].y);}
+  {const aa=pts[1],b=pts[0];let dx=b.x-aa.x,dy=b.y-aa.y;const l=Math.hypot(dx,dy)||1;dx/=l;dy/=l;
+   const r=Math.max(.4,wArr[0])/2,tx=b.x+dx*r*1.2,ty=b.y+dy*r*1.2;c.quadraticCurveTo(tx,ty,L[0].x,L[0].y);}
   c.closePath();c.fill();
 }
 function seededRand(seed){let t=seed>>>0;return()=>{t=(t*1664525+1013904223)>>>0;return t/4294967296;};}
 function hashId(id){let h=0;for(const ch of String(id||''))h=(h*31+ch.charCodeAt(0))>>>0;return h;}
+function centerline(c,pts){c.beginPath();c.moveTo(pts[0].x,pts[0].y);for(let i=1;i<pts.length-1;i++){const mx=(pts[i].x+pts[i+1].x)/2,my=(pts[i].y+pts[i+1].y)/2;c.quadraticCurveTo(pts[i].x,pts[i].y,mx,my);}if(pts.length>1)c.lineTo(pts[pts.length-1].x,pts[pts.length-1].y);}
 function drawStrokeObject(c,obj,preview){
   const raw=obj.points||[]; if(!raw.length)return; c.save();
   const baseA=preview?.85:(obj.opacity??1);
   c.fillStyle=c.strokeStyle=obj.color; c.lineJoin='round';
   const W=obj.width||3;
-  const pts=refinePts(raw);
-  if(obj.tool==='highlighter'){
-    /* 螢光筆：平頭、等寬、半透明 multiply（單一路徑，疊筆不變深） */
+  const pts=refinePts(raw,obj);
+  const tool=obj.tool;
+  if(tool==='highlighter'){
     c.globalCompositeOperation='multiply';c.globalAlpha=Math.min(baseA,.5);
-    c.lineCap='butt';c.lineWidth=W*2.2;
-    c.beginPath();c.moveTo(pts[0].x,pts[0].y);
-    for(let i=1;i<pts.length-1;i++){const mx=(pts[i].x+pts[i+1].x)/2,my=(pts[i].y+pts[i+1].y)/2;c.quadraticCurveTo(pts[i].x,pts[i].y,mx,my);}
-    if(pts.length>1)c.lineTo(pts[pts.length-1].x,pts[pts.length-1].y);c.stroke();
-  }else if(obj.tool==='fountain'){
-    /* 書法筆：大幅粗細起伏 + 筆鋒 */
-    c.globalAlpha=baseA;
-    strokeOutline(c,pts,widthProfile(pts,W,.3,2.3));
-  }else if(obj.tool==='pencil'){
-    /* 鉛筆：石墨層 + 輪廓內顆粒 */
-    c.globalAlpha=baseA*.6;
-    strokeOutline(c,pts,widthProfile(pts,W,.85,1.25));
+    c.lineCap='butt';c.lineWidth=W*2.2;centerline(c,pts);c.stroke();
+  }else if(tool==='marker'){
+    /* 麥克筆：厚實、不透明、方頭微圓、等寬 */
+    c.globalAlpha=Math.min(1,baseA);c.lineCap='round';c.lineJoin='round';c.lineWidth=W*1.7;centerline(c,pts);c.stroke();
+  }else if(tool==='fountain'){
+    c.globalAlpha=baseA;strokeOutline(c,pts,widthProfile(pts,W,.3,2.3,obj));
+  }else if(tool==='brush'){
+    /* 毛筆：極大粗細起伏 + 傾角鋪毫，收筆出鋒 */
+    c.globalAlpha=baseA;strokeOutline(c,pts,widthProfile(pts,W,.12,3.4,obj));
+  }else if(tool==='gel'){
+    /* 中性筆：滑順、幾乎等寬、飽和 */
+    c.globalAlpha=baseA;strokeOutline(c,pts,widthProfile(pts,W,.94,1.06,obj));
+  }else if(tool==='pencil'){
+    c.globalAlpha=baseA*.6;strokeOutline(c,pts,widthProfile(pts,W,.85,1.25,obj));
     const rnd=seededRand(hashId(obj.id));
     c.globalAlpha=baseA*.22;c.lineCap='round';c.lineWidth=Math.max(.5,W*.35);
-    for(let pass=0;pass<2;pass++){
-      const j=()=>(rnd()-.5)*W*.75;
-      c.beginPath();c.moveTo(pts[0].x+j(),pts[0].y+j());
-      for(let i=1;i<pts.length;i++)c.lineTo(pts[i].x+j(),pts[i].y+j());
-      c.stroke();
-    }
-  }else if(obj.tool==='laser'){
+    for(let pass=0;pass<2;pass++){const j=()=>(rnd()-.5)*W*.75;
+      c.beginPath();c.moveTo(pts[0].x+j(),pts[0].y+j());for(let i=1;i<pts.length;i++)c.lineTo(pts[i].x+j(),pts[i].y+j());c.stroke();}
+  }else if(tool==='crayon'){
+    /* 蠟筆：寬、半透明、密集顆粒紋理 */
+    const rnd=seededRand(hashId(obj.id));
+    c.globalAlpha=baseA*.5;c.lineCap='round';
+    const wA=widthProfile(pts,W,.9,1.15,obj);
+    strokeOutline(c,pts,wA);
+    c.globalAlpha=baseA*.28;
+    for(let pass=0;pass<5;pass++){c.lineWidth=Math.max(.5,W*.22);
+      const off=(rnd()-.5)*W*.9;
+      c.beginPath();for(let i=0;i<pts.length;i++){const p0=pts[Math.max(0,i-1)],p1=pts[Math.min(pts.length-1,i+1)];let dx=p1.x-p0.x,dy=p1.y-p0.y;const l=Math.hypot(dx,dy)||1;const nx=-dy/l,ny=dx/l;const x=pts[i].x+nx*off+(rnd()-.5)*1.2,y=pts[i].y+ny*off+(rnd()-.5)*1.2;i?c.lineTo(x,y):c.moveTo(x,y);}c.stroke();}
+  }else if(tool==='laser'){
     c.lineCap='round';c.globalAlpha=baseA;c.shadowColor=obj.color;c.shadowBlur=8;c.lineWidth=W;
-    c.beginPath();c.moveTo(pts[0].x,pts[0].y);
-    for(let i=1;i<pts.length;i++)c.lineTo(pts[i].x,pts[i].y);c.stroke();
+    c.beginPath();c.moveTo(pts[0].x,pts[0].y);for(let i=1;i<pts.length;i++)c.lineTo(pts[i].x,pts[i].y);c.stroke();
   }else{
-    /* 鋼筆：近等寬 + 細緻筆鋒，墨水般滑順 */
-    c.globalAlpha=baseA;
-    strokeOutline(c,pts,widthProfile(pts,W,.88,1.12));
+    /* 鋼筆（原子筆）：近等寬 + 細緻筆鋒 */
+    c.globalAlpha=baseA;strokeOutline(c,pts,widthProfile(pts,W,.86,1.14,obj));
   }
   c.restore();
 }
@@ -1177,7 +1251,7 @@ function scheduleThumbs(){clearTimeout(thumbTimer);thumbTimer=setTimeout(()=>{
 },420);}
 
 /* ============ 工具 UI ============ */
-const TOOL_DEFAULTS={pen:{width:3,opacity:1},pencil:{width:2,opacity:.9},fountain:{width:4,opacity:1},highlighter:{width:14,opacity:.4}};
+const TOOL_DEFAULTS={pen:{width:3,opacity:1},gel:{width:3,opacity:1},pencil:{width:2,opacity:.9},fountain:{width:4,opacity:1},brush:{width:6,opacity:1},marker:{width:7,opacity:.95},crayon:{width:8,opacity:.9},highlighter:{width:14,opacity:.4}};
 function setTool(tool,opts){
   opts=opts||{};
   /* 「書寫」群組鍵：點一下回到上次的筆；已在筆上再點 → 開設定 */
@@ -1310,6 +1384,27 @@ function renderStickerGrid(){
     b.classList.toggle('active',app.stamp===s);
     b.onclick=()=>{app.stamp=s;renderStickerGrid();persistSoon();toast('貼紙：'+s+'，點畫布即可貼上');};g.appendChild(b);});
 }
+const NIB_PRESETS=[
+  ['standard','一般筆頭',{tilt:.5,smooth:.45}],
+  ['paper','類紙膜',{tilt:.55,smooth:.78}],
+  ['metal','金屬筆頭',{tilt:.45,smooth:.82}],
+  ['hard','硬筆尖',{tilt:.4,smooth:.55}]
+];
+function renderInputSettings(){
+  if(app.tiltSens==null)app.tiltSens=.5;
+  if(app.smoothSens==null)app.smoothSens=.45;
+  const wrap=$('#nibChips');if(wrap){wrap.innerHTML='';
+    NIB_PRESETS.forEach(([id,lbl,v])=>{
+      const b=document.createElement('button');b.className='chip';b.textContent=lbl;
+      b.classList.toggle('active',app.nib===id);
+      b.onclick=()=>{app.nib=id;app.tiltSens=v.tilt;app.smoothSens=v.smooth;renderInputSettings();persistSoon();toast('已套用「'+lbl+'」最佳化');};
+      wrap.appendChild(b);
+    });
+  }
+  const lvl=v=>v<.34?'低':v<.67?'中':'高';
+  if($('#tiltRange')){$('#tiltRange').value=app.tiltSens;$('#tiltVal').textContent=lvl(app.tiltSens);}
+  if($('#smoothRange')){$('#smoothRange').value=app.smoothSens;$('#smoothVal').textContent=lvl(app.smoothSens);}
+}
 function renderTemplateChips(){
   const tc=$('#templateChips');tc.innerHTML='';
   const cur=activePage()?activePage().template:'ruled';
@@ -1408,7 +1503,7 @@ function snapShapePoint(p1,p2){
   const sa=Math.round(a/step)*step;const d=Math.hypot(p2.x-p1.x,p2.y-p1.y);
   return {x:p1.x+d*Math.cos(sa),y:p1.y+d*Math.sin(sa),p:p2.p||.5};
 }
-function currentStroke(points){return {id:uid('obj'),type:'stroke',tool:app.tool,color:app.color,width:Number(app.width),opacity:Number(app.opacity),points:points||[]};}
+function currentStroke(points){return {id:uid('obj'),type:'stroke',tool:app.tool,color:app.color,width:Number(app.width),opacity:Number(app.opacity),tilt:app.tiltSens??.5,smooth:app.smoothSens??.5,points:points||[]};}
 
 /* ============ 指標事件 ============ */
 /* iOS：禁止長按選字泡泡、放大鏡與系統雙指縮放頁面 */
@@ -1434,7 +1529,7 @@ viewport.addEventListener('pointerdown',e=>{
       pointerMap.delete(penPointerId);
       penPointerId=e.pointerId;lastPenAt=now;
       pointerMap.set(e.pointerId,e);viewport.setPointerCapture?.(e.pointerId);
-      const pos0=clampPoint({...clientToPage(e.clientX,e.clientY),p:e.pressure||.5});
+      const pos0=samplePoint(e);
       action.obj.points.push(pos0);renderObjects();renderLiveStroke();return;
     }
     penPointerId=e.pointerId;lastPenAt=now;
@@ -1467,7 +1562,7 @@ viewport.addEventListener('pointerdown',e=>{
     return;
   }
   if(e.pointerType==='mouse'&&e.button!==0&&e.button!==1)return;
-  const pos=clampPoint({...clientToPage(e.clientX,e.clientY),p:e.pressure||.5});
+  const pos=samplePoint(e);
   /* ── 筆跡縫合：副廠筆訊號不穩中斷後，極短時間內在附近落筆 → 自動接續上一筆 ── */
   if(['pen','pencil','fountain','highlighter'].includes(app.tool)&&!app.rulerOn&&lastStroke&&lastStroke.pg===app.activePageId&&now-lastStroke.t<lastStroke.win){
     const d=Math.hypot(pos.x-lastStroke.end.x,pos.y-lastStroke.end.y);
@@ -1518,7 +1613,13 @@ viewport.addEventListener('pointerdown',e=>{
 });
 viewport.addEventListener('pointermove',e=>{
   e.preventDefault();showEraserCursor(e);
-  if(!pointerMap.has(e.pointerId)){updateInputBadge(e.pointerType||app.lastPointerType);return;}
+  if(!pointerMap.has(e.pointerId)){
+    /* 高傾角時系統可能用新 ID 續傳，沒有 pointerdown → 收編進進行中的筆畫，避免斷線 */
+    if(e.pointerType==='pen'&&action&&action.kind==='draw'){
+      pointerMap.set(e.pointerId,e);penPointerId=e.pointerId;lastPenAt=Date.now();
+      viewport.setPointerCapture?.(e.pointerId);
+    }else{updateInputBadge(e.pointerType||app.lastPointerType);return;}
+  }
   pointerMap.set(e.pointerId,e);
   if(pointerMap.size===2&&gesture){
     const arr=[...pointerMap.values()];const dist=distance(arr[0],arr[1]);
@@ -1529,7 +1630,7 @@ viewport.addEventListener('pointermove',e=>{
     app.panX=nx-(vx-gesture.panX)*factor;app.panY=ny-(vy-gesture.panY)*factor;applyTransform();scheduleQuality();return;
   }
   if(!action)return;
-  const pos=clampPoint({...clientToPage(e.clientX,e.clientY),p:e.pressure||.5});
+  const pos=samplePoint(e);
   if(action.kind==='pan'){app.panX+=e.clientX-action.last.x;app.panY+=e.clientY-action.last.y;action.last={x:e.clientX,y:e.clientY};applyTransform();return;}
   if(action.kind==='erase'){eraseAt(pos);return;}
   if(action.kind==='lasso'){action.points.push(pos);renderOverlay();return;}
@@ -1545,7 +1646,7 @@ viewport.addEventListener('pointermove',e=>{
   if(action.kind==='laser'){action.obj.points.push(pos);if(action.obj.points.length>70)action.obj.points.shift();renderOverlay();return;}
   if(action.kind==='draw'){
     const evs=e.getCoalescedEvents?e.getCoalescedEvents():[e];
-    for(const ev of evs)action.obj.points.push(clampPoint({...clientToPage(ev.clientX,ev.clientY),p:ev.pressure||.5}));
+    for(const ev of evs)action.obj.points.push(samplePoint(ev));
     renderLiveStroke();
   }
 });
@@ -1573,7 +1674,7 @@ function pointerEnd(e,cancelled){
     /* 擦完自動切回上一支筆 */
     if(app.eraserAutoBack!==false&&app.beforeEraser&&app.beforeEraser!=='eraser'){
       setTool(app.beforeEraser,{silentPop:true});
-      toast('已切回'+({pen:'鋼筆',pencil:'鉛筆',fountain:'書法筆',highlighter:'螢光筆'}[app.tool]||'上一個工具'));
+      toast('已切回'+((PEN_TYPES.find(t=>t[0]===app.tool)||[])[2]||'上一個工具'));
     }
   }
   if(a.kind==='laser'){
@@ -1850,7 +1951,7 @@ function bindUI(){
   $('#timerBtn').onclick=toggleTimer;
   $('#moreBtn').onclick=e=>{e.stopPropagation();const p=$('#morePop');
     if(p.classList.contains('show')){p.classList.remove('show');return;}
-    closeAllPanels();placePopover(p,$('#moreBtn'));};
+    closeAllPanels();renderInputSettings();placePopover(p,$('#moreBtn'));};
 
   /* 工具列右側 */
   $('#colorMore').onclick=e=>{e.stopPropagation();const p=$('#penPop');
@@ -1886,6 +1987,8 @@ function bindUI(){
   $('#fillToggle').onclick=()=>{app.shapeFill=!app.shapeFill;renderToolUI();persistSoon();};
   $('#snapToggle').onclick=()=>{app.shapeSnap=!app.shapeSnap;renderToolUI();persistSoon();};
   $('#eraserAutoBack').onclick=()=>{app.eraserAutoBack=app.eraserAutoBack===false?true:false;renderToolUI();persistSoon();};
+  $('#tiltRange').addEventListener('input',e=>{app.tiltSens=Number(e.target.value);renderInputSettings();persistSoon();});
+  $('#smoothRange').addEventListener('input',e=>{app.smoothSens=Number(e.target.value);renderInputSettings();persistSoon();});
 
   /* 貼紙彈窗 */
   $('#stampSize').addEventListener('input',e=>{app.stampSize=Number(e.target.value);$('#stampSizeVal').textContent=app.stampSize;persistSoon();});
@@ -1978,6 +2081,8 @@ function bindUI(){
 /* ============ 初始化 ============ */
 function init(){
   load();
+  if(app.tiltSens==null)app.tiltSens=.5;
+  if(app.smoothSens==null)app.smoothSens=.45;
   document.body.classList.toggle('dark',!!app.dark);
   setupCanvas();
   paintStaticIcons();
