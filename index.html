@@ -377,7 +377,7 @@ body.dark .debug-table-wrap{background:rgba(40,34,29,.45)}
   <div class="lib-head">
     <div class="lib-brand">
       <div class="lib-logo" id="libLogo"></div>
-      <div><b>Renote Atelier</b><span>HANDWRITTEN NOTES STUDIO</span></div>
+      <div><b>Renote Atelier</b><span>HANDWRITTEN NOTES STUDIO · INPUT v16</span></div>
     </div>
     <button class="iconbtn" id="libDark" title="深色 / 淺色模式"></button>
     <button class="pillbtn" id="libImport" title="匯入 JSON 備份"></button>
@@ -647,13 +647,25 @@ let touchCommitTimer=null, lastRawMoveAt=new Map(), lastMoveSig=new Map();
 let deferredInkRefineTimer=null, lastInkCommitAt=0, inkBurstCount=0, lastInkRefineAt=0;
 let inputDebugRows=[], inputDebugEnabled=false, inputDebugRenderTimer=null, perfFrameCounter=0, perfLastTs=performance.now(), perfFPS=0;
 let debugLastMoveLogAt=0, debugMoveSkip=0, debugPanelVisible=false;
-/* v15：低延遲筆跡。
+/* v13：低延遲筆跡。
    v12 的補點 / native ink rescue 會讓快寫更重；v13 回到「少做事」策略：
    1) pen 事件一進來就立刻補畫，不等下一個 rAF；
    2) debug 預設關閉，開面板才記錄；
    3) 不在 move 期間做插值或高品質重繪。 */
-let immediateInkLastAt=0, immediateInkFrameBudgetMs=4.5;
-let inputRectCache=null, inputRectCacheAt=0;
+let immediateInkLastAt=0, immediateInkFrameBudgetMs=4;
+/* v16 Input Tuning：不靠放寬 touch，而是讓真正 pen 完全不受傾角/壓力/接觸面積干擾。
+   核心設定：pointerType=pen 永遠可下筆；tilt 只影響筆刷寬度，不參與偵測是否可寫。 */
+const INPUT_TUNING={
+  PEN_ALWAYS_INK:true,
+  IGNORE_TILT_FOR_DETECTION:true,
+  PEN_MIN_POINT_DIST:0.16,
+  PEN_SAME_TS_MIN_DIST:0.55,
+  PEN_COALESCED_MAX:26,
+  TOUCH_COALESCED_MAX:16,
+  START_DOT_RADIUS_RATIO:.62,
+  START_DOT_MIN_RADIUS:1.35,
+  ORPHAN_PEN_RESCUE:true
+};
 let compatStylusConfidence=0, lastCompatStylusAt=0, lastRealPenAt=0;
 let pageRenderStats={lastObjectCount:0,lastPointCount:0,lastRenderMs:0};
 let penPointerId=null, lastPenAt=0;      // 手掌拒絕：追蹤觸控筆狀態
@@ -838,7 +850,6 @@ function enableTransformAnimation(ms=260){
   transformAnimTimer=setTimeout(()=>wrap.classList.remove('ui-animate'),ms+40);
 }
 function applyTransform(animate=false){
-  inputRectCache=null;
   if(animate)enableTransformAnimation();
   wrap.style.transform=`translate(${app.panX}px,${app.panY}px) scale(${app.zoom})`;
   wrap.style.setProperty('--tx',app.panX+'px'); wrap.style.setProperty('--ty',app.panY+'px'); wrap.style.setProperty('--tz',app.zoom);
@@ -877,40 +888,22 @@ function animateZoom(targetZoom,cx,cy){
     if(t<1)zoomAnim=requestAnimationFrame(step);else{zoomAnim=null;scheduleQuality();}
   })(t0);
 }
-function getInputGeometry(){
-  const now=performance.now();
-  if(!inputRectCache||now-inputRectCacheAt>12){
-    const r=wrap.getBoundingClientRect();
-    inputRectCache={left:r.left,top:r.top,zoom:app.zoom};
-    inputRectCacheAt=now;
-  }
-  return inputRectCache;
-}
-function clientToPage(x,y){const g=getInputGeometry(); return {x:(x-g.left)/g.zoom,y:(y-g.top)/g.zoom};}
+function clientToPage(x,y){const r=wrap.getBoundingClientRect(); return {x:(x-r.left)/app.zoom,y:(y-r.top)/app.zoom};}
 function pageToClient(x,y){const vr=viewport.getBoundingClientRect(), wr=wrap.getBoundingClientRect(); return {x:wr.left-vr.left+x*app.zoom,y:wr.top-vr.top+y*app.zoom};}
 function roundN(v,n){const m=Math.pow(10,n);return Math.round(v*m)/m;}
 function compactPoint(p){return {x:roundN(p.x,1),y:roundN(p.y,1),p:roundN(p.p||.5,2),tl:roundN(p.tl||0,2),t:Math.round(p.t||performance.now())};}
 function clampPoint(p){return compactPoint({x:Math.max(-200,Math.min(PAGE_W+200,p.x)),y:Math.max(-200,Math.min(PAGE_H+200,p.y)),p:p.p||.5,tl:p.tl||0,t:p.t||0});}
-function samplePointFast(ev,g){
-  return clampPoint({x:(ev.clientX-g.left)/g.zoom,y:(ev.clientY-g.top)/g.zoom,p:Math.max(.02,rawPressure(ev)<0?.5:rawPressure(ev)),tl:tiltOf(ev),t:ev.timeStamp||performance.now()});
-}
 function addPointToStroke(obj,p,force=false){
   if(!obj)return false;const pts=obj.points||(obj.points=[]);const q=compactPoint(p),last=pts[pts.length-1];
   if(last&&!force){
-    const dx=q.x-last.x,dy=q.y-last.y,d=Math.hypot(dx,dy);
-    if(d<0.22)return false;
-    if(q.t===last.t&&d<0.7)return false;
-    const dt=Math.max(0,(q.t||0)-(last.t||0));
-    /* v15：只在真正出現事件空窗時補 1 個中點。不是 v12 的密集插值，避免卡頓。 */
-    if(obj._lightBridge&&dt>34&&d>9&&d<135){
-      pts.push(compactPoint({x:last.x+dx*.5,y:last.y+dy*.5,p:(last.p+q.p)*.5,tl:(last.tl+q.tl)*.5,t:last.t+dt*.5}));
-      obj._bridgedPoints=(obj._bridgedPoints||0)+1;
-    }
+    const d=Math.hypot(q.x-last.x,q.y-last.y);
+    if(d<INPUT_TUNING.PEN_MIN_POINT_DIST)return false;
+    if(q.t===last.t&&d<INPUT_TUNING.PEN_SAME_TS_MIN_DIST)return false;
   }
   pts.push(q);return true;
 }
 function addPointsToStroke(obj,points){let n=0;for(const p of points)if(addPointToStroke(obj,p))n++;return n;}
-function normalizeStrokePoints(points){const out=[];for(const p of (points||[])){const q=compactPoint(p);const last=out[out.length-1];if(!last||Math.hypot(q.x-last.x,q.y-last.y)>=0.25||q.t!==last.t)out.push(q);}return out;}
+function normalizeStrokePoints(points){const out=[];for(const p of (points||[])){const q=compactPoint(p);const last=out[out.length-1];if(!last||Math.hypot(q.x-last.x,q.y-last.y)>=INPUT_TUNING.PEN_MIN_POINT_DIST||q.t!==last.t)out.push(q);}return out;}
 /* 從事件擷取完整筆觸資料：位置、壓力、傾角、時間 —— 對副廠筆/金屬筆頭/類紙膜做容錯 */
 function tiltOf(ev){
   /* 優先用 altitudeAngle（弧度，π/2=垂直）；否則用 tiltX/tiltY */
@@ -927,7 +920,12 @@ function rawPressure(ev){
   if(pr==null||isNaN(pr)||pr<=0)return -1;
   return pr;
 }
-function samplePoint(ev){return samplePointFast(ev,getInputGeometry());}
+function samplePoint(ev,rect){
+  /* v16：同一批 coalesced points 共用 rect，避免每個點都觸發 getBoundingClientRect/layout。 */
+  const r=rect||wrap.getBoundingClientRect();
+  const pg={x:(ev.clientX-r.left)/app.zoom,y:(ev.clientY-r.top)/app.zoom};
+  return clampPoint({x:pg.x,y:pg.y,p:Math.max(.02,rawPressure(ev)<0?.5:rawPressure(ev)),tl:tiltOf(ev),t:ev.timeStamp||performance.now()});
+}
 
 /* ============ 紙樣 ============ */
 function drawTemplateTo(c,tpl,w=PAGE_W,h=PAGE_H){
@@ -1295,11 +1293,8 @@ function renderObjects(){const p=activePage();const t0=performance.now();ctx.cle
   pageRenderStats.lastPointCount=p.objects.reduce((n,o)=>n+((o.points&&o.points.length)||0),0);
   pageRenderStats.lastRenderMs=Math.round((performance.now()-t0)*10)/10;
 }
-function renderLiveStroke(){ /* v15：真實 pen 直接畫到主畫布，touch 相容筆仍用 overlay 保護縮放判斷。 */
-  if(action&&action.kind==='draw'){
-    const target=(action.obj&&action.obj._liveLayer==='main')?ctx:ov;
-    drawLiveStrokeFast(target,action.obj);
-  }
+function renderLiveStroke(){ /* v4：書寫中不再每影格重算整條筆跡，只補畫新增段落，降低快寫延遲 */
+  if(action&&action.kind==='draw')drawLiveStrokeFast(ov,action.obj);
 }
 function drawLiveStrokeFast(c,obj){
   const pts=obj.points||[]; if(!pts.length)return;
@@ -1313,7 +1308,7 @@ function drawLiveStrokeFast(c,obj){
   else if(obj.tool==='pencil'){alpha*=.65;}
   else if(obj.tool==='crayon'){alpha*=.58;w*=1.2;}
   c.globalAlpha=alpha;c.lineWidth=Math.max(.8,w);
-  if(pts.length===1){c.beginPath();c.arc(pts[0].x,pts[0].y,Math.max(1,w/2),0,Math.PI*2);c.fill();c.restore();obj._liveDrawn=1;return;}
+  if(pts.length===1){const rr=Math.max(INPUT_TUNING.START_DOT_MIN_RADIUS,w*INPUT_TUNING.START_DOT_RADIUS_RATIO);c.beginPath();c.arc(pts[0].x,pts[0].y,rr,0,Math.PI*2);c.fill();c.restore();obj._liveDrawn=1;return;}
   c.beginPath();c.moveTo(pts[start].x,pts[start].y);
   for(let i=start+1;i<pts.length-1;i++){
     const mx=(pts[i].x+pts[i+1].x)/2,my=(pts[i].y+pts[i+1].y)/2;
@@ -1742,7 +1737,7 @@ document.addEventListener('pointerdown',e=>{
 function updateInputBadge(type){
   if(type)app.lastPointerType=type;
   const el=$('#inputBadge');if(!el)return;
-  const mode=app.smartTouchStylus?'Smart v15 · eiP2':'Strict · Pen';
+  const mode=app.smartTouchStylus?'Smart v13 · eiP2':'Strict · Pen';
   const pt=app.lastPointerType==='pen'?'Pen':app.lastPointerType==='touch'?'Touch':app.lastPointerType==='mouse'?'Mouse':'Ready';
   el.textContent=mode+' · '+pt;
   el.className='input-badge '+(app.smartTouchStylus?'touch':'pen');
@@ -1957,7 +1952,7 @@ function isPenContactActive(e){
   return e.type==='pointermove'||e.type==='pointerrawupdate';
 }
 function rescueOrphanPenMove(e,role){
-  if(role!=='pen'||!isPenContactActive(e)||!isDrawingCapableTool())return false;
+  if(!INPUT_TUNING.ORPHAN_PEN_RESCUE||role!=='pen'||!isPenContactActive(e)||!isDrawingCapableTool())return false;
   clearTouchPending();
   if(action&&action.kind==='pan')action=null;
   markRecentPenForNativeTouch(e);
@@ -1976,11 +1971,12 @@ function rescueOrphanPenMove(e,role){
 }
 function classifyPointerInput(e,phase='move'){
   const pt=e.pointerType||'';
+  /* v16：真正 pen 是最高優先級。任何傾角、接觸面積、pressure=0 都不影響偵測。 */
+  if(INPUT_TUNING.PEN_ALWAYS_INK&&hasRealPenSignal(e)){lastRealPenAt=Date.now();return 'pen';}
   if(pt==='touch'&&Date.now()<suppressPointerUntil)return 'nativeTouch';
   if(pt==='touch'&&nativeTouchLooksFinger(e))return 'finger';
   if(pt==='touch')touchBlockMouseUntil=Date.now()+900;
   if(pt==='mouse')return Date.now()<touchBlockMouseUntil?'blockedMouse':'mouse';
-  if(hasRealPenSignal(e)){lastRealPenAt=Date.now();return 'pen';}
   if(pt!=='touch')return 'finger';
   if(isPalmLike(e))return 'palm';
   if(!app.smartTouchStylus)return 'finger';
@@ -2062,15 +2058,11 @@ function beginInkAction(e,pos,role,seedPoints){
   }
   penPointerId=e.pointerId;lastPenAt=now;
   pointerRoleMap.set(e.pointerId,role);
-  clearTimeout(deferredInkRefineTimer);
   action={kind:'draw',startedAt:now,inputRole:role,obj:currentStroke(seed)};
   action.obj._liveDrawn=0;
-  action.obj._lightBridge=(role==='pen');
-  action.obj._liveLayer=(role==='pen')?'main':'overlay';
   activePage().objects.push(action.obj);
-  /* v15：主動筆直接 fast-ink 到 drawCanvas，抬筆不必再整筆 commit；相容 touch 筆仍先留 overlay。 */
-  if(action.obj._liveLayer!=='main')ov.clearRect(0,0,PAGE_W,PAGE_H);
-  requestLiveRender(true);
+  /* v13：下筆立即顯示第一個墨點，不等 rAF，也不做整頁重繪。 */
+  ov.clearRect(0,0,PAGE_W,PAGE_H);requestLiveRender(true);
 }
 function beginToolActionAfterInkGate(e,pos,role){
   const now=Date.now();
@@ -2158,31 +2150,26 @@ function decidePendingTouchIntent(e,pos){
   return 'wait';
 }
 function shouldProcessMoveEvent(e){
-  const ts=Math.round((e.timeStamp||0)*4);
-  const last=lastMoveSig.get(e.pointerId);
-  if(last&&last.type===e.type&&last.ts===ts&&Math.abs(last.x-e.clientX)<.03&&Math.abs(last.y-e.clientY)<.03)return false;
-  lastMoveSig.set(e.pointerId,{type:e.type,ts,x:e.clientX,y:e.clientY});
-  /* v15：去重不再產生大量字串，降低快寫 move 路徑的 GC 壓力。 */
+  /* v16：數值去重，避免每個 move 建立字串；raw/move 若同時間同座標則只處理一次。 */
+  const sig=(Math.round((e.timeStamp||0)*10)*100000000)+(Math.round(e.clientX*10)*10000)+Math.round(e.clientY*10);
+  const last=lastMoveSig.get(e.pointerId);if(last===sig)return false;lastMoveSig.set(e.pointerId,sig);
   if(e.type==='pointerrawupdate'){lastRawMoveAt.set(e.pointerId,performance.now());}
   return true;
 }
 function collectMovePoints(e){
   let evs=e.getCoalescedEvents?e.getCoalescedEvents():null;
   if(!evs||!evs.length)evs=[e];
-  const currentLen=(action&&action.kind==='draw'&&action.obj&&action.obj.points)?action.obj.points.length:0;
-  /* v15：起筆段保留較多 coalesced points；穩定書寫後自動降到低 GC / 低延遲。 */
-  const maxPts=(e.pointerType==='pen')?(currentLen<18?36:26):18;
-  const g=getInputGeometry();
-  const arr=[];
+  /* v16：不要補點；只保留真實事件點。上限避免極端 burst 造成 GC，rect 只取一次。 */
+  const maxPts=(e.pointerType==='pen')?INPUT_TUNING.PEN_COALESCED_MAX:INPUT_TUNING.TOUCH_COALESCED_MAX;
   if(evs.length>maxPts){
-    const step=(evs.length-1)/(maxPts-1);
-    for(let i=0;i<maxPts;i++){
-      const ev=evs[Math.min(evs.length-1,Math.round(i*step))];
-      arr.push(samplePointFast(ev,g));
-    }
-  }else{
-    for(const ev of evs)arr.push(samplePointFast(ev,g));
+    const step=Math.ceil(evs.length/maxPts), sampled=[];
+    for(let i=0;i<evs.length;i+=step)sampled.push(evs[i]);
+    if(sampled[sampled.length-1]!==evs[evs.length-1])sampled.push(evs[evs.length-1]);
+    evs=sampled;
   }
+  const rect=wrap.getBoundingClientRect();
+  const arr=[];
+  for(const ev of evs)arr.push(samplePoint(ev,rect));
   return arr;
 }
 
@@ -2290,7 +2277,7 @@ function handlePointerDown(e){
   clearTimeout(deferredInkRefineTimer);
   if((e.pointerType||'')==='touch'&&Date.now()<suppressPointerUntil){debugEventRow(e,'down','nativeTouch','suppressed-pointer');e.preventDefault();return;}
   e.preventDefault();updateInputBadge(e.pointerType||'unknown');
-  if(document.querySelector('.popover.show'))closeAllPanelsSoft();
+  closeAllPanelsSoft();
   const now=Date.now();
   const DRAW_KINDS=['draw','previewShape','rulerLine','laser','erase','lasso','touchPending'];
   const role=classifyPointerInput(e,'down');
@@ -2420,15 +2407,9 @@ function handlePointerMove(e){
       const isRealPen=(e.pointerType==='pen'||role==='pen');
       const justStarted=action.startedAt&&Date.now()-action.startedAt<140;
       /* 真正 pen 優先低延遲；touch 相容筆仍走 rAF，避免和縮放/拖移競爭。 */
-      requestLiveRender(isRealPen&&(justStarted||nowPerf-immediateInkLastAt>currentImmediateInkBudget()));
+      requestLiveRender(isRealPen&&(justStarted||nowPerf-immediateInkLastAt>immediateInkFrameBudgetMs));
     }
   }
-}
-function currentImmediateInkBudget(){
-  const pts=pageRenderStats.lastPointCount||0;
-  if(pts>90000)return 8.5;
-  if(pts>45000)return 6.5;
-  return immediateInkFrameBudgetMs;
 }
 /* rAF 渲染排程：輸入只負責收點（極快），畫面在下一影格只補畫新增段落 → 不掉幀、下筆即時 */
 let liveRAF=null;
@@ -2477,9 +2458,9 @@ function pointerEnd(e,cancelled){
   }
   if(a.kind==='draw'){
     if(!a.stitched)pushAdd(a.obj);
-    /* v15：real pen 已經直接 fast-ink 到主畫布，不再於 pointerup 整筆重畫，降低下一筆漏偵測機率。 */
-    if(a.obj._liveLayer!=='main')commitStrokeFastToMain(a.obj);
-    delete a.obj._liveDrawn;delete a.obj._liveLayer;delete a.obj._lightBridge;
+    /* v9：抬筆當下只做 fast commit，不做完整 refine/outline，避免主執行緒卡住而漏掉下一個快筆 pointerdown。 */
+    commitStrokeFastToMain(a.obj);
+    delete a.obj._liveDrawn;
     renderOverlay();scheduleDeferredInkRefine();
     activePage().updatedAt=Date.now();persistSoon();scheduleThumbs();
   }
