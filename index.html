@@ -617,7 +617,7 @@ let recentPenNativeGuard={x:0,y:0,t:0};
 let recentNativeTouch={x:0,y:0,r:0,t:0,touches:0};
 let nativeFingerUntil=0;
 let touchCommitTimer=null, lastRawMoveAt=new Map(), lastMoveSig=new Map();
-let deferredInkRefineTimer=null;
+let deferredInkRefineTimer=null, lastInkCommitAt=0, inkBurstCount=0, lastInkRefineAt=0;
 let inputDebugRows=[], inputDebugEnabled=true, inputDebugRenderTimer=null, perfFrameCounter=0, perfLastTs=performance.now(), perfFPS=0;
 let debugLastMoveLogAt=0, debugMoveSkip=0, debugPanelVisible=false;
 let compatStylusConfidence=0, lastCompatStylusAt=0, lastRealPenAt=0;
@@ -730,10 +730,10 @@ function pageIndex(){const nb=activeNotebook(); return nb?nb.pages.findIndex(p=>
 
 /* ============ 儲存 ============ */
 function isInputBusy(){return (action&&['draw','erase','previewShape','rulerLine','laser','lasso','moveSelection','scaleSelection','touchPending'].includes(action.kind))||penPointerId!==null||pointerMap.size>0;}
-function persistSoon(){clearTimeout(saveTimer); setSaved(false); saveTimer=setTimeout(saveNow,1400);}
+function persistSoon(){clearTimeout(saveTimer); setSaved(false); saveTimer=setTimeout(saveNow,3000);}
 function saveNow(){
   /* 書寫中絕不存檔（同步 stringify 會卡住下一筆）→ 延後到放筆後 */
-  if(isInputBusy()){clearTimeout(saveTimer);saveTimer=setTimeout(saveNow,900);return;}
+  if(isInputBusy()||Date.now()-lastInkCommitAt<2200){clearTimeout(saveTimer);saveTimer=setTimeout(saveNow,1400);return;}
   const run=()=>{
     try{localStorage.setItem(APP_KEY,JSON.stringify(app)); memoryFallback=null; setSaved(true);}
     catch(e){memoryFallback=clone(app); setSaved(true,'僅存在記憶體'); }
@@ -1257,14 +1257,32 @@ function commitStrokeFastToMain(obj){
   obj._liveDrawn=old;
 }
 function scheduleDeferredInkRefine(){
+  /* v11：長字 / 多筆畫保護。
+     抬筆後先不要急著做整頁高品質重繪；連續寫字期間只保留 fast ink。
+     等使用者真正停筆一段時間後，才用 idle 執行 renderObjects()。
+     這可以避免中文多筆畫字在第 3、4 筆之間被 refine 打斷。 */
+  const now=Date.now();
+  if(now-lastInkCommitAt<950) inkBurstCount=Math.min(18,inkBurstCount+1);
+  else inkBurstCount=1;
+  lastInkCommitAt=now;
   clearTimeout(deferredInkRefineTimer);
+  const heavy=pageRenderStats.lastPointCount>45000;
+  const baseDelay=heavy?4200:(inkBurstCount>=8?3400:(inkBurstCount>=4?2600:1900));
   deferredInkRefineTimer=setTimeout(function refineLater(){
-    if(isInputBusy()){deferredInkRefineTimer=setTimeout(refineLater,360);return;}
-    /* v10：高品質重繪改成「更晚 + idle」。
-       快速連寫時不搶主執行緒，避免上一筆 refine 卡住下一筆 pointerdown。 */
-    const run=()=>{if(!isInputBusy()){renderObjects();renderOverlay();}};
-    if(window.requestIdleCallback)requestIdleCallback(run,{timeout:1400});else setTimeout(run,0);
-  },760);
+    const quiet=Date.now()-lastInkCommitAt;
+    const requiredQuiet=heavy?3600:(inkBurstCount>=8?2800:(inkBurstCount>=4?2200:1600));
+    if(isInputBusy()||quiet<requiredQuiet){
+      deferredInkRefineTimer=setTimeout(refineLater,420);
+      return;
+    }
+    const run=()=>{
+      if(isInputBusy()||Date.now()-lastInkCommitAt<requiredQuiet)return;
+      lastInkRefineAt=Date.now();
+      renderObjects();
+      renderOverlay();
+    };
+    if(window.requestIdleCallback)requestIdleCallback(run,{timeout:heavy?5200:2600});else setTimeout(run,0);
+  },baseDelay);
 }
 function renderOverlay(){
   ov.clearRect(0,0,PAGE_W,PAGE_H);
@@ -1445,14 +1463,14 @@ function renderSidebar(){
   renderTemplateChips();renderRecordings();
 }
 function scheduleThumbs(){clearTimeout(thumbTimer);thumbTimer=setTimeout(function go(){
-  if(isInputBusy()){thumbTimer=setTimeout(go,400);return;}   /* 書寫中不畫縮圖 */
+  /* v11：連續寫多筆畫時，縮圖也不要搶主執行緒。 */
+  if(isInputBusy()||Date.now()-lastInkCommitAt<1800){thumbTimer=setTimeout(go,900);return;}
   const nb=activeNotebook();if(!nb||app.view!=='editor')return;
   const cards=$$('#thumbList .thumb-card canvas');
   const idle=window.requestIdleCallback||(f=>setTimeout(f,0));
-  /* 只重畫目前頁的縮圖，其餘維持原樣（避免每筆都全部重畫） */
   const ai=pageIndex();
   if(cards[ai])idle(()=>renderThumbCanvas(cards[ai],nb.pages[ai]));
-}, pageRenderStats.lastPointCount>25000?2200:900);}
+}, pageRenderStats.lastPointCount>25000?3200:1800);}
 
 /* ============ 工具 UI ============ */
 const TOOL_DEFAULTS={pen:{width:3,opacity:1},gel:{width:3,opacity:1},pencil:{width:2,opacity:.9},fountain:{width:4,opacity:1},brush:{width:6,opacity:1},marker:{width:7,opacity:.95},crayon:{width:8,opacity:.9},highlighter:{width:14,opacity:.4}};
